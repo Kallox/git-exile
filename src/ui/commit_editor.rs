@@ -2,6 +2,9 @@
 
 use eframe::egui::{self, Key, Modifiers, RichText, TextEdit, Ui};
 
+use super::icons::{self, ButtonStyle, Icon};
+use super::theme;
+
 const SUMMARY_SOFT_LIMIT: usize = 50;
 const SUMMARY_HARD_LIMIT: usize = 72;
 
@@ -58,10 +61,34 @@ impl CommitEditor {
         // Se consume antes de dibujar los campos para que no inserte un salto de línea.
         let shortcut = ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::Enter));
 
+        egui::Frame::new()
+            .fill(theme::BG_CARD)
+            .stroke(egui::Stroke::new(1.0, theme::BORDER))
+            .corner_radius(10)
+            .inner_margin(egui::Margin::symmetric(16, 14))
+            .show(ui, |ui| {
+                action = self.form(ui, staged, author, shortcut);
+            });
+        action
+    }
+
+    fn form(
+        &mut self,
+        ui: &mut Ui,
+        staged: usize,
+        author: Option<&str>,
+        shortcut: bool,
+    ) -> Option<EditorAction> {
+        let mut action = None;
+        ui.spacing_mut().item_spacing.y = 8.0;
         ui.horizontal(|ui| {
-            ui.strong("Nuevo commit");
+            ui.label(RichText::new("Nuevo commit").font(theme::font_semibold(13.0)));
             if let Some(author) = author {
-                ui.weak(format!("como {author}"));
+                ui.label(
+                    RichText::new(format!("como {author}"))
+                        .size(12.0)
+                        .color(theme::TEXT_MUTED),
+                );
             }
         });
 
@@ -82,6 +109,7 @@ impl CommitEditor {
                 ui.add(
                     TextEdit::singleline(&mut self.summary)
                         .hint_text("Resumen (obligatorio)")
+                        .margin(egui::vec2(10.0, 7.0))
                         .desired_width(f32::INFINITY),
                 );
             });
@@ -89,6 +117,7 @@ impl CommitEditor {
         ui.add(
             TextEdit::multiline(&mut self.body)
                 .hint_text("Descripción (opcional)")
+                .margin(egui::vec2(10.0, 7.0))
                 .desired_rows(4)
                 .desired_width(f32::INFINITY),
         );
@@ -116,10 +145,9 @@ impl CommitEditor {
                 } else {
                     format!("{label} de {staged} archivos (Ctrl+Enter)")
                 };
-                let button = ui
-                    .add_enabled(can_commit, egui::Button::new(RichText::new(label).strong()))
-                    .on_hover_text(&hint)
-                    .on_disabled_hover_text(&hint);
+                let button =
+                    icons::button(ui, Icon::Check, label, ButtonStyle::Primary, can_commit)
+                        .on_hover_text(&hint);
                 if can_commit && (button.clicked() || shortcut) {
                     action = Some(EditorAction::Commit {
                         message: self.message(),

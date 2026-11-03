@@ -823,10 +823,16 @@ impl RepoTab {
         };
         egui::SidePanel::left("worktree_files")
             .resizable(true)
-            .default_width(ui.available_width() * 0.4)
-            .min_width(200.0)
+            .default_width(ui.available_width() * 0.45)
+            .min_width(280.0)
+            .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(24, 20)))
             .show_inside(ui, |ui| {
                 egui::TopBottomPanel::bottom("commit_editor")
+                    .frame(egui::Frame::new().inner_margin(egui::Margin {
+                        top: 12,
+                        ..Default::default()
+                    }))
+                    .show_separator_line(false)
                     .resizable(false)
                     .show_inside(ui, |ui| {
                         ui.add_space(4.0);

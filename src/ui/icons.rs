@@ -25,6 +25,7 @@ pub enum Icon {
     Merge,
     Home,
     ArrowUp,
+    Check,
 }
 
 /// Transforma coordenadas de la cuadrícula 24x24 al rectángulo destino.
@@ -152,6 +153,7 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32, width: f
             line(&[(3.0, 11.0), (12.0, 3.5), (21.0, 11.0)]);
             line(&[(5.5, 9.5), (5.5, 20.0), (18.5, 20.0), (18.5, 9.5)]);
         }
+        Icon::Check => line(&[(5.0, 12.5), (10.0, 17.5), (19.0, 7.0)]),
         Icon::ArrowUp => {
             line(&[(12.0, 19.0), (12.0, 5.0)]);
             line(&[(6.0, 11.0), (12.0, 5.0), (18.0, 11.0)]);

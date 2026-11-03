@@ -1,9 +1,13 @@
 //! Lista de archivos con cambios sin commitear.
 
-use eframe::egui::{Align, Color32, Layout, RichText, ScrollArea, Ui};
+use eframe::egui::{self, Color32, Rect, RichText, ScrollArea, Ui, vec2};
 
-use super::theme::{GREEN as ADDED, RED as REMOVED};
+use super::commit_details::{Trailing, file_row};
+use super::theme;
 use crate::git::{ChangeKind, StatusEntry, WorkingTreeStatus};
+
+/// Ancho reservado a la derecha de cada fila para su botón.
+const BUTTON_SPACE: f32 = 86.0;
 
 /// Archivo seleccionado en la vista de cambios.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,6 +86,7 @@ pub fn show(
                 selected,
                 &mut action,
             );
+            ui.add_space(12.0);
             section(ui, Section::Staged, &status.staged, selected, &mut action);
         });
     action
@@ -100,29 +105,36 @@ fn section(
         Section::Unstaged => "Sin añadir",
         Section::Staged => "Preparados para commit",
     };
-    ui.add_space(4.0);
     ui.horizontal(|ui| {
-        ui.strong(format!("{title} ({})", entries.len()));
+        ui.set_min_height(28.0);
+        ui.label(RichText::new(title).font(theme::font_semibold(13.0)));
+        ui.label(
+            RichText::new(entries.len().to_string())
+                .size(12.0)
+                .color(theme::TEXT_MUTED),
+        );
         if entries.is_empty() {
             return;
         }
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| match kind {
-            Section::Unstaged => {
-                if ui.small_button("Añadir todo").clicked() {
-                    *action = Some(StatusAction::StageAll);
-                }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let text = match kind {
+                Section::Unstaged => "Añadir todo",
+                Section::Staged => "Quitar todo",
+                Section::Conflicted => return,
+            };
+            if small_button(ui, text).clicked() {
+                *action = Some(if staged {
+                    StatusAction::UnstageAll
+                } else {
+                    StatusAction::StageAll
+                });
             }
-            Section::Staged => {
-                if ui.small_button("Quitar todo").clicked() {
-                    *action = Some(StatusAction::UnstageAll);
-                }
-            }
-            Section::Conflicted => {}
         });
     });
     if entries.is_empty() {
-        ui.weak("Nada");
+        ui.label(RichText::new("Nada").color(theme::TEXT_MUTED));
     }
+    ui.spacing_mut().item_spacing.y = 2.0;
     for entry in entries {
         let file = WtFile {
             path: entry.path.clone(),
@@ -140,43 +152,55 @@ fn section(
                 StatusAction::Stage(paths())
             }
         };
-        ui.horizontal(|ui| {
-            kind_badge(ui, entry.kind);
-            let label = match &entry.orig_path {
-                Some(orig) => format!("{orig} → {}", entry.path),
-                None => entry.path.clone(),
-            };
-            let resp = ui.selectable_label(selected == Some(&file), label);
-            if resp.double_clicked() {
-                *action = Some(toggle());
-            } else if resp.clicked() {
-                *action = Some(StatusAction::Select(file.clone()));
-            }
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let (text, hint) = match kind {
-                    Section::Staged => ("Quitar", "Sacar del próximo commit"),
-                    Section::Unstaged => ("Añadir", "Añadir al próximo commit"),
-                    Section::Conflicted => ("Resuelto", "Marcar el conflicto como resuelto"),
-                };
-                if ui.small_button(text).on_hover_text(hint).clicked() {
-                    *action = Some(toggle());
-                }
-            });
-        });
+        let label = match &entry.orig_path {
+            Some(orig) => format!("{orig} → {}", entry.path),
+            None => entry.path.clone(),
+        };
+        let resp = file_row(
+            ui,
+            entry.kind.letter(),
+            kind_color(entry.kind),
+            &label,
+            Trailing::Space(BUTTON_SPACE),
+            selected == Some(&file),
+        )
+        .on_hover_text("Doble clic para moverlo de lista");
+
+        // Botón encima del hueco reservado a la derecha de la fila.
+        let (text, hint) = match kind {
+            Section::Staged => ("Quitar", "Sacar del próximo commit"),
+            Section::Unstaged => ("Añadir", "Añadir al próximo commit"),
+            Section::Conflicted => ("Resuelto", "Marcar el conflicto como resuelto"),
+        };
+        let rect = resp.rect;
+        let button_rect = Rect::from_min_size(
+            egui::pos2(rect.right() - BUTTON_SPACE + 4.0, rect.center().y - 12.0),
+            vec2(BUTTON_SPACE - 14.0, 24.0),
+        );
+        let button = ui
+            .put(
+                button_rect,
+                egui::Button::new(RichText::new(text).size(12.0)).corner_radius(6),
+            )
+            .on_hover_text(hint);
+
+        if button.clicked() || resp.double_clicked() {
+            *action = Some(toggle());
+        } else if resp.clicked() {
+            *action = Some(StatusAction::Select(file.clone()));
+        }
     }
 }
 
-pub fn kind_badge(ui: &mut Ui, kind: ChangeKind) {
-    let color = match kind {
-        ChangeKind::Added | ChangeKind::Untracked => ADDED,
-        ChangeKind::Deleted | ChangeKind::Conflicted => REMOVED,
-        ChangeKind::Modified | ChangeKind::TypeChanged => Color32::from_rgb(220, 170, 60),
-        ChangeKind::Renamed | ChangeKind::Copied => Color32::from_rgb(100, 150, 220),
-    };
-    ui.label(
-        RichText::new(kind.letter().to_string())
-            .monospace()
-            .strong()
-            .color(color),
-    );
+fn small_button(ui: &mut Ui, text: &str) -> egui::Response {
+    ui.add(egui::Button::new(RichText::new(text).size(12.0)).corner_radius(6))
+}
+
+pub fn kind_color(kind: ChangeKind) -> Color32 {
+    match kind {
+        ChangeKind::Added | ChangeKind::Untracked => theme::GREEN,
+        ChangeKind::Deleted | ChangeKind::Conflicted => theme::RED,
+        ChangeKind::Modified | ChangeKind::TypeChanged => theme::YELLOW,
+        ChangeKind::Renamed | ChangeKind::Copied => theme::BLUE,
+    }
 }

@@ -233,13 +233,18 @@ pub fn file_list(ui: &mut Ui, files: &[FileDiff], selected: &mut Option<usize>) 
             (Some(old), Some(new)) if old != new => format!("{old} → {new}"),
             _ => file.path().to_owned(),
         };
-        let stats = (!file.binary).then(|| file.stats());
+        let trailing = if file.binary {
+            Trailing::Binary
+        } else {
+            let (added, removed) = file.stats();
+            Trailing::Stats(added, removed)
+        };
         if file_row(
             ui,
             file.status.letter(),
             status_color(file.status),
             &path,
-            stats,
+            trailing,
             *selected == Some(i),
         )
         .clicked()
@@ -249,13 +254,23 @@ pub fn file_list(ui: &mut Ui, files: &[FileDiff], selected: &mut Option<usize>) 
     }
 }
 
+/// Lo que se muestra a la derecha de una fila de archivo.
+#[derive(Clone, Copy)]
+pub enum Trailing {
+    /// Líneas añadidas y borradas.
+    Stats(usize, usize),
+    Binary,
+    /// Hueco libre de ese ancho (para botones encima).
+    Space(f32),
+}
+
 /// Fila de archivo de 34 px: letra de estado, ruta (carpeta atenuada) y +/−.
 pub fn file_row(
     ui: &mut Ui,
     letter: char,
     color: Color32,
     path: &str,
-    stats: Option<(usize, usize)>,
+    trailing: Trailing,
     selected: bool,
 ) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
@@ -271,8 +286,8 @@ pub fn file_row(
 
     // Números a la derecha.
     let mut right = rect.right() - 10.0;
-    match stats {
-        Some((added, removed)) => {
+    match trailing {
+        Trailing::Stats(added, removed) => {
             let r = painter.text(
                 pos2(right, y),
                 Align2::RIGHT_CENTER,
@@ -290,7 +305,8 @@ pub fn file_row(
             );
             right = r.left() - 10.0;
         }
-        None => {
+        Trailing::Space(width) => right -= width,
+        Trailing::Binary => {
             let r = painter.text(
                 pos2(right, y),
                 Align2::RIGHT_CENTER,
