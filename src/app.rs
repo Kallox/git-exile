@@ -5,7 +5,9 @@ use eframe::egui::{self, Key, Modifiers};
 use crate::browser;
 use crate::git::{self, Repo};
 use crate::repo_tab::{Jobs, RepoMessage, RepoTab};
+use crate::ui::icons::{self, ButtonStyle, Icon};
 use crate::ui::repo_browser::{BrowserAction, RepoBrowser};
+use crate::ui::theme;
 use crate::worker::Worker;
 
 const RECENT_KEY: &str = "recent_repositories";
@@ -304,49 +306,21 @@ impl GitExileApp {
         let mut open = None;
         let mut new_tab = false;
 
-        ui.horizontal(|ui| {
+        ui.horizontal_centered(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
             egui::ScrollArea::horizontal()
-                .max_width(ui.available_width() - 220.0)
+                .max_width(ui.available_width() - 180.0)
                 .show(ui, |ui| {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_centered(|ui| {
                         for (i, tab) in self.tabs.iter().enumerate() {
-                            let active = i == self.active;
-                            let frame = egui::Frame::new()
-                                .inner_margin(egui::Margin::symmetric(6, 2))
-                                .corner_radius(4)
-                                .fill(if active {
-                                    ui.visuals().selection.bg_fill
-                                } else {
-                                    ui.visuals().faint_bg_color
-                                });
-                            frame.show(ui, |ui| {
-                                let mut title = egui::RichText::new(tab.title());
-                                if active {
-                                    title = title.color(ui.visuals().selection.stroke.color);
-                                }
-                                if matches!(tab.content, TabContent::Loading(_)) {
-                                    ui.spinner();
-                                }
-                                let resp = ui
-                                    .add(egui::Label::new(title).sense(egui::Sense::click()))
-                                    .on_hover_text(tab.path().display().to_string());
-                                if resp.clicked() {
-                                    activate = Some(i);
-                                }
-                                if resp.middle_clicked() {
-                                    close = Some(i);
-                                }
-                                if ui
-                                    .small_button("x")
-                                    .on_hover_text("Cerrar pestaña (Ctrl+W)")
-                                    .clicked()
-                                {
-                                    close = Some(i);
-                                }
-                            });
+                            let action = tab_widget(ui, tab, i == self.active);
+                            match action {
+                                Some(TabWidgetAction::Activate) => activate = Some(i),
+                                Some(TabWidgetAction::Close) => close = Some(i),
+                                None => {}
+                            }
                         }
-                        if ui
-                            .button("+")
+                        if icons::icon_button(ui, Icon::Plus, 32.0, 14.0, theme::TEXT_MUTED)
                             .on_hover_text("Abrir otro repositorio (Ctrl+T)")
                             .clicked()
                         {
@@ -356,9 +330,11 @@ impl GitExileApp {
                 });
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.menu_button("Recientes", |ui| {
+                let recent = icons::button(ui, Icon::Clock, "Recientes", ButtonStyle::Ghost, true);
+                egui::Popup::menu(&recent).show(|ui| {
+                    ui.set_min_width(320.0);
                     if self.recent.is_empty() {
-                        ui.label("Sin repositorios recientes");
+                        ui.weak("Sin repositorios recientes");
                     }
                     for path in &self.recent {
                         if ui.button(path.display().to_string()).clicked() {
@@ -386,17 +362,122 @@ impl GitExileApp {
         }
     }
 
-    fn error_bar(&mut self, ui: &mut egui::Ui) {
+    fn error_bar(&mut self, ctx: &egui::Context) {
+        let Some(error) = &self.error else { return };
         let mut close = false;
-        if let Some(error) = &self.error {
-            ui.horizontal(|ui| {
-                ui.colored_label(ui.visuals().error_fg_color, error);
-                close = ui.small_button("Cerrar").clicked();
+        egui::TopBottomPanel::top("error_bar")
+            .frame(
+                egui::Frame::new()
+                    .fill(theme::alpha(theme::RED, 0.10))
+                    .inner_margin(egui::Margin::symmetric(20, 8)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.colored_label(theme::RED, error);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        close = icons::icon_button(ui, Icon::Close, 24.0, 12.0, theme::TEXT_MUTED)
+                            .on_hover_text("Cerrar")
+                            .clicked();
+                    });
+                });
             });
-        }
         if close {
             self.error = None;
         }
+    }
+}
+
+enum TabWidgetAction {
+    Activate,
+    Close,
+}
+
+/// Una pestaña: icono, título y botón de cerrar.
+fn tab_widget(ui: &mut egui::Ui, tab: &Tab, active: bool) -> Option<TabWidgetAction> {
+    let title = tab.title();
+    let font = theme::font(13.0);
+    let galley = ui.painter().layout_no_wrap(
+        title,
+        font,
+        if active {
+            theme::TEXT
+        } else {
+            theme::TEXT_SECONDARY
+        },
+    );
+    let width = 12.0 + 14.0 + 8.0 + galley.size().x + 8.0 + 24.0 + 6.0;
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 32.0), egui::Sense::click());
+    let resp = resp.on_hover_text(tab.path().display().to_string());
+    let painter = ui.painter();
+    if active {
+        painter.rect(
+            rect,
+            8.0,
+            theme::BG_BUTTON,
+            egui::Stroke::new(1.0, theme::BORDER_STRONG),
+            egui::StrokeKind::Inside,
+        );
+    } else if resp.hovered() {
+        painter.rect_filled(rect, 8.0, theme::BG_INPUT);
+    }
+
+    let icon_rect = egui::Rect::from_center_size(
+        egui::pos2(rect.left() + 12.0 + 7.0, rect.center().y),
+        egui::vec2(14.0, 14.0),
+    );
+    match &tab.content {
+        TabContent::Loading(_) => {
+            egui::Spinner::new()
+                .size(12.0)
+                .color(theme::ACCENT)
+                .paint_at(ui, icon_rect);
+        }
+        TabContent::Browser(_) => {
+            icons::paint(painter, icon_rect, Icon::Search, theme::ACCENT, 2.0);
+        }
+        TabContent::Repo(_) => {
+            let color = if active {
+                theme::ACCENT
+            } else {
+                theme::TEXT_MUTED
+            };
+            icons::paint(painter, icon_rect, Icon::Folder, color, 2.0);
+        }
+    }
+    let text_pos = egui::pos2(
+        icon_rect.right() + 8.0,
+        rect.center().y - galley.size().y / 2.0,
+    );
+    painter.galley(text_pos, galley, theme::TEXT);
+
+    let close_rect = egui::Rect::from_center_size(
+        egui::pos2(rect.right() - 6.0 - 12.0, rect.center().y),
+        egui::vec2(24.0, 24.0),
+    );
+    let close = ui
+        .interact(close_rect, resp.id.with("close"), egui::Sense::click())
+        .on_hover_text("Cerrar pestaña (Ctrl+W)");
+    if close.hovered() {
+        ui.painter().rect_filled(close_rect, 6.0, theme::BG_ACTIVE);
+    }
+    icons::paint(
+        ui.painter(),
+        egui::Rect::from_center_size(close_rect.center(), egui::vec2(12.0, 12.0)),
+        Icon::Close,
+        if close.hovered() {
+            theme::TEXT
+        } else {
+            theme::TEXT_MUTED
+        },
+        2.2,
+    );
+
+    if close.clicked() || resp.middle_clicked() {
+        Some(TabWidgetAction::Close)
+    } else if resp.clicked() {
+        Some(TabWidgetAction::Activate)
+    } else {
+        None
     }
 }
 
@@ -425,10 +506,15 @@ impl eframe::App for GitExileApp {
             self.refresh_active();
         }
 
-        egui::TopBottomPanel::top("tab_bar").show(ctx, |ui| {
-            self.tab_bar(ui);
-            self.error_bar(ui);
-        });
+        egui::TopBottomPanel::top("tab_bar")
+            .exact_height(44.0)
+            .frame(
+                egui::Frame::new()
+                    .fill(theme::BG_TABS)
+                    .inner_margin(egui::Margin::symmetric(12, 0)),
+            )
+            .show(ctx, |ui| self.tab_bar(ui));
+        self.error_bar(ctx);
 
         let mut browser_action = None;
         let recent = &self.recent;

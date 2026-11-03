@@ -9,7 +9,9 @@ use crate::ui::commit_details::{self, DetailsAction};
 use crate::ui::commit_editor::{CommitEditor, EditorAction};
 use crate::ui::commit_list::{CommitList, ContextAction, ListRow};
 use crate::ui::diff_view;
+use crate::ui::icons::{self, ButtonStyle, Icon};
 use crate::ui::status_panel::{self, StatusAction, WtFile};
+use crate::ui::theme;
 use crate::worker::Worker;
 
 const LOG_PAGE: usize = 500;
@@ -507,9 +509,12 @@ impl RepoTab {
     /// Dibuja la pestaña completa.
     pub fn ui(&mut self, ui: &mut egui::Ui, jobs: &mut Jobs) {
         let mut actions = Vec::new();
-        egui::TopBottomPanel::top("repo_toolbar").show_inside(ui, |ui| {
-            self.toolbar(ui, &mut actions);
-        });
+        egui::TopBottomPanel::top("repo_toolbar")
+            .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(20, 12)))
+            .show_inside(ui, |ui| {
+                self.toolbar(ui, &mut actions);
+            });
+        self.error_bar(ui);
         self.repo_view(ui, &mut actions);
         if let Some(dialog) = &mut self.new_branch {
             match dialog.show(ui.ctx()) {
@@ -533,25 +538,21 @@ impl RepoTab {
 
     fn toolbar(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
         ui.horizontal(|ui| {
-            ui.strong(self.repo.name())
-                .on_hover_text(self.repo.root().display().to_string());
+            ui.spacing_mut().item_spacing.x = 10.0;
+            ui.label(
+                egui::RichText::new(self.repo.name())
+                    .font(theme::font_semibold(16.0))
+                    .color(theme::TEXT),
+            )
+            .on_hover_text(self.repo.root().display().to_string());
             self.branch_menu(ui, actions);
             if let Some(status) = &self.status
                 && let Some(upstream) = &status.upstream
             {
-                ui.weak(format!(
-                    "{upstream} (+{} / -{})",
-                    status.ahead, status.behind
-                ));
+                upstream_chip(ui, upstream, status.ahead, status.behind);
             }
+
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .button("Refrescar")
-                    .on_hover_text("Volver a leer el repositorio (F5)")
-                    .clicked()
-                {
-                    actions.push(Action::Refresh);
-                }
                 let selected_commit = match self.selected {
                     Some(ListRow::Commit(i)) => Some(i),
                     _ => None,
@@ -560,22 +561,47 @@ impl RepoTab {
                     Some(c) => format!("Crear una rama en el commit {}", c.short_id),
                     None => "Crear una rama en HEAD (el último commit)".to_owned(),
                 };
-                if ui
-                    .add_enabled(!self.commits.is_empty(), egui::Button::new("Nueva rama"))
-                    .on_hover_text(hint)
-                    .clicked()
+                if icons::button(
+                    ui,
+                    Icon::Plus,
+                    "Nueva rama",
+                    ButtonStyle::Primary,
+                    !self.commits.is_empty(),
+                )
+                .on_hover_text(hint)
+                .clicked()
                 {
                     actions.push(Action::NewBranch(selected_commit));
                 }
+                if icons::button(ui, Icon::Refresh, "Refrescar", ButtonStyle::Secondary, true)
+                    .on_hover_text("Volver a leer el repositorio (F5)")
+                    .clicked()
+                {
+                    actions.push(Action::Refresh);
+                }
             });
         });
+    }
+
+    fn error_bar(&mut self, ui: &mut egui::Ui) {
+        let Some(error) = &self.error else { return };
         let mut close = false;
-        if let Some(error) = &self.error {
-            ui.horizontal(|ui| {
-                ui.colored_label(ui.visuals().error_fg_color, error);
-                close = ui.small_button("Cerrar").clicked();
+        egui::TopBottomPanel::top("repo_error")
+            .frame(
+                egui::Frame::new()
+                    .fill(theme::alpha(theme::RED, 0.10))
+                    .inner_margin(egui::Margin::symmetric(20, 8)),
+            )
+            .show_inside(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.colored_label(theme::RED, error);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        close = icons::icon_button(ui, Icon::Close, 24.0, 12.0, theme::TEXT_MUTED)
+                            .on_hover_text("Cerrar")
+                            .clicked();
+                    });
+                });
             });
-        }
         if close {
             self.error = None;
         }
@@ -583,11 +609,10 @@ impl RepoTab {
 
     /// Menú para cambiar de rama, con filtro por nombre.
     fn branch_menu(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
-        let label = match &self.branch {
-            Some(b) => format!("Rama: {b}"),
-            None => "HEAD separado".to_owned(),
-        };
-        let resp = ui.menu_button(label, |ui| {
+        let button = branch_button(ui, self.branch.as_deref()).on_hover_text(
+            "Cambiar de rama. Los cambios sin commitear se mantienen si no hay conflicto.",
+        );
+        let resp = egui::Popup::menu(&button).show(|ui| {
             ui.set_min_width(280.0);
             let filter = ui.add(
                 egui::TextEdit::singleline(&mut self.branch_filter)
@@ -651,11 +676,8 @@ impl RepoTab {
                     }
                 });
         });
-        resp.response.on_hover_text(
-            "Cambiar de rama. Los cambios sin commitear se mantienen si no hay conflicto.",
-        );
         // Al cerrar el menú se limpia el filtro.
-        if resp.inner.is_none() {
+        if resp.is_none() {
             self.branch_filter.clear();
         }
     }
@@ -777,4 +799,108 @@ impl RepoTab {
             None => diff_view::placeholder(ui, "Selecciona un archivo para ver el diff."),
         });
     }
+}
+
+/// Botón de rama con fondo de acento, como en el diseño.
+fn branch_button(ui: &mut egui::Ui, branch: Option<&str>) -> egui::Response {
+    let painter = ui.painter();
+    let label = painter.layout_no_wrap(
+        if branch.is_some() {
+            "Rama"
+        } else {
+            "HEAD separado"
+        }
+        .to_owned(),
+        theme::font(13.0),
+        theme::TEXT_SECONDARY,
+    );
+    let name = painter.layout_no_wrap(
+        branch.unwrap_or_default().to_owned(),
+        theme::font_semibold(13.0),
+        theme::TEXT,
+    );
+    let gap = 8.0;
+    let name_width = if branch.is_some() {
+        name.size().x + gap
+    } else {
+        0.0
+    };
+    let width = 12.0 + 14.0 + gap + label.size().x + gap + name_width + 12.0 + 12.0;
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 34.0), egui::Sense::click());
+    let painter = ui.painter();
+    let fill = if resp.hovered() {
+        theme::alpha(theme::ACCENT, 0.2)
+    } else {
+        theme::accent_soft()
+    };
+    painter.rect(
+        rect,
+        8.0,
+        fill,
+        egui::Stroke::new(1.0, theme::accent_line()),
+        egui::StrokeKind::Inside,
+    );
+    let mut x = rect.left() + 12.0;
+    let cy = rect.center().y;
+    icons::paint(
+        painter,
+        egui::Rect::from_min_size(egui::pos2(x, cy - 7.0), egui::vec2(14.0, 14.0)),
+        Icon::Branch,
+        theme::ACCENT,
+        2.0,
+    );
+    x += 14.0 + gap;
+    let h = label.size().y;
+    let w = label.size().x;
+    painter.galley(egui::pos2(x, cy - h / 2.0), label, theme::TEXT_SECONDARY);
+    x += w + gap;
+    if branch.is_some() {
+        let w = name.size().x;
+        painter.galley(egui::pos2(x, cy - h / 2.0), name, theme::TEXT);
+        x += w + gap;
+    }
+    icons::paint(
+        painter,
+        egui::Rect::from_min_size(egui::pos2(x, cy - 6.0), egui::vec2(12.0, 12.0)),
+        Icon::ChevronDown,
+        theme::TEXT_MUTED,
+        2.2,
+    );
+    resp
+}
+
+/// Rama remota que se sigue, con commits por subir y por bajar.
+fn upstream_chip(ui: &mut egui::Ui, upstream: &str, ahead: u32, behind: u32) {
+    egui::Frame::new()
+        .fill(theme::BG_INPUT)
+        .corner_radius(8)
+        .inner_margin(egui::Margin::symmetric(12, 0))
+        .show(ui, |ui| {
+            ui.set_height(34.0);
+            ui.horizontal_centered(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                icons::show(ui, Icon::Cloud, 14.0, theme::TEXT_SECONDARY);
+                let mono = |text: String, color| {
+                    egui::RichText::new(text)
+                        .font(theme::mono(12.0))
+                        .color(color)
+                };
+                ui.label(mono(upstream.to_owned(), theme::TEXT_SECONDARY));
+                ui.label(mono(format!("↑{ahead}"), theme::GREEN))
+                    .on_hover_text("Commits por subir");
+                ui.label(mono(format!("↓{behind}"), theme::TEXT_SECONDARY))
+                    .on_hover_text("Commits por bajar");
+                let state = match (ahead, behind) {
+                    (0, 0) => "Sincronizado".to_owned(),
+                    (a, 0) => format!("{a} por subir"),
+                    (0, b) => format!("{b} por bajar"),
+                    (a, b) => format!("{a} por subir, {b} por bajar"),
+                };
+                ui.label(
+                    egui::RichText::new(state)
+                        .size(12.0)
+                        .color(theme::TEXT_MUTED),
+                );
+            });
+        });
 }
