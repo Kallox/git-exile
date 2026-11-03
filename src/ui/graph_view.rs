@@ -2,23 +2,26 @@
 
 use eframe::egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, epaint::CubicBezierShape, pos2};
 
+use super::theme;
 use crate::git::{GraphRow, Half};
 
-pub const LANE_WIDTH: f32 = 14.0;
+pub const LANE_WIDTH: f32 = 18.0;
+/// Margen izquierdo hasta el centro del primer carril.
+const LEFT: f32 = 22.0;
 /// A partir de aquí los carriles se recortan para no comerse la lista.
 pub const MAX_VISIBLE_LANES: usize = 16;
-const NODE_RADIUS: f32 = 4.0;
-const LINE_WIDTH: f32 = 1.6;
+const NODE_RADIUS: f32 = 4.5;
+const LINE_WIDTH: f32 = 2.0;
 
 const PALETTE: [Color32; 8] = [
-    Color32::from_rgb(66, 165, 245),
-    Color32::from_rgb(102, 187, 106),
-    Color32::from_rgb(239, 83, 80),
-    Color32::from_rgb(255, 167, 38),
-    Color32::from_rgb(171, 71, 188),
-    Color32::from_rgb(38, 198, 218),
-    Color32::from_rgb(236, 64, 122),
-    Color32::from_rgb(212, 225, 87),
+    theme::ACCENT,
+    theme::TEAL,
+    theme::ORANGE,
+    theme::BLUE,
+    theme::GREEN,
+    theme::YELLOW,
+    Color32::from_rgb(0xF2, 0x8B, 0xC6),
+    theme::RED,
 ];
 
 pub fn color(index: usize) -> Color32 {
@@ -27,15 +30,23 @@ pub fn color(index: usize) -> Color32 {
 
 /// Ancho de la columna del grafo para `lanes` carriles.
 pub fn width(lanes: usize) -> f32 {
-    lanes.clamp(1, MAX_VISIBLE_LANES) as f32 * LANE_WIDTH + LANE_WIDTH / 2.0
+    LEFT + (lanes.clamp(1, MAX_VISIBLE_LANES) - 1) as f32 * LANE_WIDTH + LEFT
 }
 
 fn lane_x(rect: Rect, lane: usize) -> f32 {
-    rect.left() + LANE_WIDTH / 2.0 + lane as f32 * LANE_WIDTH
+    rect.left() + LEFT + lane as f32 * LANE_WIDTH
 }
 
-/// Dibuja la fila `row` en `rect`. `is_head` resalta el commit actual.
-pub fn paint_row(painter: &Painter, rect: Rect, row: &GraphRow, is_head: bool, bg: Color32) {
+/// Dibuja la fila `row` en `rect`. `is_head` resalta el commit actual
+/// y `selected` el seleccionado.
+pub fn paint_row(
+    painter: &Painter,
+    rect: Rect,
+    row: &GraphRow,
+    is_head: bool,
+    selected: bool,
+    bg: Color32,
+) {
     let painter = painter.with_clip_rect(rect.intersect(painter.clip_rect()));
     let cy = rect.center().y;
 
@@ -51,10 +62,13 @@ pub fn paint_row(painter: &Painter, rect: Rect, row: &GraphRow, is_head: bool, b
 
     let center = pos2(lane_x(rect, row.lane), cy);
     let c = color(row.color);
-    if is_head {
-        painter.circle(center, NODE_RADIUS + 1.5, bg, Stroke::new(2.5, c));
+    if selected {
+        painter.circle(center, 7.0, bg, Stroke::new(2.0, c));
+        painter.circle_filled(center, 3.5, c);
+    } else if is_head {
+        painter.circle(center, 6.0, bg, Stroke::new(2.5, c));
     } else {
-        painter.circle(center, NODE_RADIUS, c, Stroke::new(1.0, bg));
+        painter.circle_filled(center, NODE_RADIUS, c);
     }
 }
 
@@ -63,7 +77,7 @@ pub fn paint_worktree_node(painter: &Painter, rect: Rect, bg: Color32) {
     let painter = painter.with_clip_rect(rect.intersect(painter.clip_rect()));
     let x = lane_x(rect, 0);
     let center = pos2(x, rect.center().y);
-    let grey = Color32::from_gray(140);
+    let grey = theme::TEXT_MUTED;
     let stroke = Stroke::new(LINE_WIDTH, grey);
     // Línea discontinua hacia HEAD.
     let mut y = center.y;

@@ -1,16 +1,18 @@
-use eframe::egui::{
-    self, Align2, Color32, CornerRadius, FontId, Key, Rect, ScrollArea, Sense, Stroke, Ui, pos2,
-    vec2,
-};
+use eframe::egui::{self, Align2, Color32, Key, Rect, ScrollArea, Sense, Stroke, Ui, pos2, vec2};
 
 use super::graph_view;
+use super::icons::{self, Icon};
+use super::theme;
 use crate::git::{Commit, Graph, RefKind, RefLabel};
 
-pub const ROW_HEIGHT: f32 = 24.0;
-const HASH_WIDTH: f32 = 80.0;
-const DATE_WIDTH: f32 = 130.0;
-const AUTHOR_WIDTH: f32 = 160.0;
-const PADDING: f32 = 6.0;
+pub const ROW_HEIGHT: f32 = 34.0;
+const HEADER_HEIGHT: f32 = 32.0;
+const HASH_WIDTH: f32 = 96.0;
+const DATE_WIDTH: f32 = 150.0;
+const AUTHOR_WIDTH: f32 = 190.0;
+const RIGHT_PADDING: f32 = 20.0;
+const MIN_GRAPH_WIDTH: f32 = 76.0;
+const GAP: f32 = 6.0;
 /// Cuántas filas antes del final se pide la siguiente página.
 const PREFETCH_ROWS: usize = 100;
 
@@ -46,28 +48,65 @@ pub struct ListResponse {
 
 /// Convierte entre filas lógicas y posiciones en pantalla.
 #[derive(Clone, Copy)]
-struct Layout {
+struct Layout<'a> {
     worktree: bool,
     commits: usize,
+    /// Si hay un filtro, los índices de los commits visibles.
+    visible: Option<&'a [usize]>,
 }
 
-impl Layout {
+impl Layout<'_> {
+    fn commit_rows(self) -> usize {
+        self.visible.map_or(self.commits, <[usize]>::len)
+    }
+
     fn len(self) -> usize {
-        self.commits + self.worktree as usize
+        self.commit_rows() + self.worktree as usize
     }
 
     fn row(self, index: usize) -> ListRow {
+        let commit = |i: usize| ListRow::Commit(self.visible.map_or(i, |v| v[i]));
         match (self.worktree, index) {
             (true, 0) => ListRow::WorkingTree,
-            (true, i) => ListRow::Commit(i - 1),
-            (false, i) => ListRow::Commit(i),
+            (true, i) => commit(i - 1),
+            (false, i) => commit(i),
         }
     }
 
     fn index(self, row: ListRow) -> Option<usize> {
         match row {
             ListRow::WorkingTree => self.worktree.then_some(0),
-            ListRow::Commit(i) => Some(i + self.worktree as usize),
+            ListRow::Commit(i) => {
+                let pos = match self.visible {
+                    Some(v) => v.iter().position(|&x| x == i)?,
+                    None => i,
+                };
+                Some(pos + self.worktree as usize)
+            }
+        }
+    }
+}
+
+/// Posiciones de las columnas en una fila.
+struct Columns {
+    graph: f32,
+    desc: f32,
+    author: f32,
+    date: f32,
+    hash: f32,
+}
+
+impl Columns {
+    fn new(rect: Rect, graph_width: f32) -> Self {
+        let hash = rect.right() - RIGHT_PADDING - HASH_WIDTH;
+        let date = hash - DATE_WIDTH;
+        let author = date - AUTHOR_WIDTH;
+        Self {
+            graph: rect.left(),
+            desc: rect.left() + graph_width,
+            author,
+            date,
+            hash,
         }
     }
 }
@@ -80,6 +119,7 @@ impl CommitList {
 
     /// Dibuja la lista. `worktree_changes` es el número de archivos con cambios
     /// sin commitear; si es `Some`, se añade una fila para ellos arriba.
+    /// Con `visible` solo se muestran esos commits (búsqueda) y no se dibuja el grafo.
     pub fn show(
         &mut self,
         ui: &mut Ui,
@@ -87,10 +127,12 @@ impl CommitList {
         graph: &Graph,
         selected: Option<ListRow>,
         worktree_changes: Option<usize>,
+        visible: Option<&[usize]>,
     ) -> ListResponse {
         let layout = Layout {
             worktree: worktree_changes.is_some(),
             commits: commits.len(),
+            visible,
         };
         let selected_index = selected.and_then(|r| layout.index(r));
         let mut response = ListResponse::default();
@@ -99,7 +141,14 @@ impl CommitList {
             self.scroll_to = Some(layout.row(new));
         }
 
-        let graph_width = graph_view::width(graph.max_width());
+        let show_graph = visible.is_none();
+        let graph_width = if show_graph {
+            graph_view::width(graph.max_width()).max(MIN_GRAPH_WIDTH)
+        } else {
+            20.0
+        };
+        header(ui, graph_width, show_graph);
+
         let mut area = ScrollArea::vertical().auto_shrink(false);
         if let Some(row) = self.scroll_to.take().and_then(|r| layout.index(r)) {
             let top = row as f32 * ROW_HEIGHT;
@@ -134,7 +183,7 @@ impl CommitList {
                         ui,
                         rect,
                         &commits[i],
-                        graph.rows.get(i),
+                        graph.rows.get(i).filter(|_| show_graph),
                         graph_width,
                         is_selected,
                         resp.hovered(),
@@ -200,19 +249,49 @@ impl CommitList {
     }
 }
 
-fn row_background(ui: &Ui, rect: Rect, selected: bool, hovered: bool) -> Color32 {
-    let visuals = ui.visuals();
-    let bg = if selected {
-        visuals.selection.bg_fill
-    } else if hovered {
-        visuals.widgets.hovered.weak_bg_fill
-    } else {
-        visuals.panel_fill
+/// Cabecera con los nombres de las columnas.
+fn header(ui: &mut Ui, graph_width: f32, show_graph: bool) {
+    let (rect, _) =
+        ui.allocate_exact_size(vec2(ui.available_width(), HEADER_HEIGHT), Sense::hover());
+    let painter = ui.painter();
+    painter.hline(
+        rect.x_range(),
+        rect.bottom() - 0.5,
+        Stroke::new(1.0, theme::BORDER_SOFT),
+    );
+    let cols = Columns::new(rect, graph_width);
+    let y = rect.center().y;
+    let font = theme::font_semibold(11.0);
+    let mut text = |x: f32, s: &str| {
+        painter.text(
+            pos2(x, y),
+            Align2::LEFT_CENTER,
+            s,
+            font.clone(),
+            theme::TEXT_MUTED,
+        );
     };
-    if selected || hovered {
-        ui.painter().rect_filled(rect, 0.0, bg);
+    if show_graph {
+        text(cols.graph + 20.0, "GRAFO");
     }
-    bg
+    text(cols.desc, "DESCRIPCIÓN");
+    text(cols.author, "AUTOR");
+    text(cols.date, "FECHA");
+    text(cols.hash, "COMMIT");
+}
+
+fn row_background(ui: &Ui, rect: Rect, selected: bool, hovered: bool) -> Color32 {
+    if selected {
+        ui.painter()
+            .rect_filled(rect, 0.0, theme::accent_selected());
+        // Mezcla aproximada del acento sobre el fondo, para rellenar los nodos.
+        theme::BG_ACTIVE
+    } else if hovered {
+        ui.painter().rect_filled(rect, 0.0, theme::BG_CARD);
+        theme::BG_CARD
+    } else {
+        theme::BG
+    }
 }
 
 fn paint_worktree_row(
@@ -229,19 +308,19 @@ fn paint_worktree_row(
     graph_view::paint_worktree_node(&painter, graph_rect, bg);
 
     let color = if selected {
-        ui.visuals().selection.stroke.color
+        theme::TEXT_STRONG
     } else {
-        ui.visuals().text_color()
+        theme::TEXT_SECONDARY
     };
     let text = match changes {
         1 => "Cambios sin commitear (1 archivo)".to_owned(),
         n => format!("Cambios sin commitear ({n} archivos)"),
     };
     painter.text(
-        pos2(rect.left() + graph_width + PADDING, rect.center().y),
+        pos2(rect.left() + graph_width, rect.center().y),
         Align2::LEFT_CENTER,
         text,
-        FontId::proportional(13.0),
+        theme::font(13.0),
         color,
     );
 }
@@ -256,8 +335,9 @@ fn paint_row(
     hovered: bool,
 ) {
     let bg = row_background(ui, rect, selected, hovered);
-    let visuals = ui.visuals();
     let painter = ui.painter_at(rect);
+    let cols = Columns::new(rect, graph_width);
+    let y = rect.center().y;
 
     if let Some(row) = graph_row {
         let is_head = commit
@@ -265,100 +345,180 @@ fn paint_row(
             .iter()
             .any(|r| matches!(r.kind, RefKind::Head | RefKind::Branch { current: true }));
         let graph_rect = Rect::from_min_size(rect.min, vec2(graph_width, rect.height()));
-        graph_view::paint_row(&painter, graph_rect, row, is_head, bg);
+        graph_view::paint_row(&painter, graph_rect, row, is_head, selected, bg);
     }
 
-    let text_color = if selected {
-        visuals.selection.stroke.color
-    } else {
-        visuals.text_color()
-    };
-    let weak_color = if selected {
-        text_color
-    } else {
-        visuals.weak_text_color()
-    };
-    let font = FontId::proportional(13.0);
-    let mono = FontId::monospace(12.0);
-    let y = rect.center().y;
-
-    // Columnas fijas a la derecha.
-    let hash_x = rect.right() - HASH_WIDTH;
-    let date_x = hash_x - DATE_WIDTH;
-    let author_x = date_x - AUTHOR_WIDTH;
+    // Hash.
     painter.text(
-        pos2(hash_x + PADDING, y),
+        pos2(cols.hash, y),
         Align2::LEFT_CENTER,
         &commit.short_id,
-        mono,
-        weak_color,
+        theme::mono(12.0),
+        if selected {
+            theme::ACCENT
+        } else {
+            theme::TEXT_MUTED
+        },
     );
-    painter.text(
-        pos2(date_x + PADDING, y),
-        Align2::LEFT_CENTER,
-        super::format_time(commit.time),
-        font.clone(),
-        weak_color,
-    );
+
+    // Fecha.
     painter
         .with_clip_rect(Rect::from_x_y_ranges(
-            author_x..=date_x - PADDING,
+            cols.date..=cols.hash - GAP,
             rect.y_range(),
         ))
         .text(
-            pos2(author_x + PADDING, y),
+            pos2(cols.date, y),
             Align2::LEFT_CENTER,
-            &commit.author_name,
-            font.clone(),
-            text_color,
+            super::format_time(commit.time),
+            theme::font(13.0),
+            theme::TEXT_DATE,
         );
 
+    // Autor con avatar.
+    let author_painter = painter.with_clip_rect(Rect::from_x_y_ranges(
+        cols.author..=cols.date - GAP,
+        rect.y_range(),
+    ));
+    let avatar_center = pos2(cols.author + 10.0, y);
+    avatar(&author_painter, avatar_center, 10.0, &commit.author_name);
+    author_painter.text(
+        pos2(cols.author + 28.0, y),
+        Align2::LEFT_CENTER,
+        &commit.author_name,
+        theme::font(13.0),
+        theme::TEXT_SOFT,
+    );
+
     // Etiquetas de ramas/tags y mensaje.
-    let summary_left = rect.left() + graph_width;
-    let summary_clip = Rect::from_x_y_ranges(summary_left..=author_x - PADDING, rect.y_range());
-    let painter = painter.with_clip_rect(summary_clip);
-    let mut x = summary_left + PADDING;
+    let desc_clip = Rect::from_x_y_ranges(cols.desc..=cols.author - GAP * 2.0, rect.y_range());
+    let painter = painter.with_clip_rect(desc_clip);
+    let mut x = cols.desc;
     for label in &commit.refs {
-        x = paint_ref(&painter, label, x, rect) + 4.0;
+        x = paint_ref(&painter, label, x, y) + GAP;
     }
     painter.text(
         pos2(x, y),
         Align2::LEFT_CENTER,
         &commit.summary,
-        font,
-        text_color,
+        theme::font(13.0),
+        if selected {
+            theme::TEXT_STRONG
+        } else {
+            theme::TEXT
+        },
     );
+}
+
+/// Iniciales del autor en un círculo de color estable para cada nombre.
+pub fn avatar(painter: &egui::Painter, center: egui::Pos2, radius: f32, name: &str) {
+    let (bg, fg) = avatar_colors(name);
+    painter.circle_filled(center, radius, bg);
+    painter.text(
+        center,
+        Align2::CENTER_CENTER,
+        initials(name),
+        theme::font_semibold(radius * 0.9),
+        fg,
+    );
+}
+
+fn avatar_colors(name: &str) -> (Color32, Color32) {
+    const COLORS: [(Color32, Color32); 6] = [
+        (theme::ACCENT, Color32::from_rgb(0xD6, 0xCB, 0xFF)),
+        (theme::TEAL, Color32::from_rgb(0x7F, 0xDC, 0xCD)),
+        (theme::ORANGE, theme::ORANGE_TEXT),
+        (theme::BLUE, Color32::from_rgb(0xA9, 0xC4, 0xFA)),
+        (theme::GREEN, Color32::from_rgb(0xA8, 0xEB, 0xCD)),
+        (theme::YELLOW, Color32::from_rgb(0xF6, 0xD9, 0x96)),
+    ];
+    let hash = name
+        .bytes()
+        .fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32));
+    let (base, fg) = COLORS[hash as usize % COLORS.len()];
+    (theme::alpha(base, 0.2), fg)
+}
+
+fn initials(name: &str) -> String {
+    let words: Vec<&str> = name.split_whitespace().collect();
+    let first = |w: &str| w.chars().next().map(|c| c.to_uppercase().to_string());
+    match words.as_slice() {
+        [] => "?".to_owned(),
+        [one] => one.chars().take(2).collect::<String>().to_uppercase(),
+        [a, .., b] => format!(
+            "{}{}",
+            first(a).unwrap_or_default(),
+            first(b).unwrap_or_default()
+        ),
+    }
 }
 
 /// Dibuja una etiqueta de referencia y devuelve la x donde termina.
-fn paint_ref(painter: &egui::Painter, label: &RefLabel, x: f32, row: Rect) -> f32 {
-    let fill = ref_color(label.kind);
-    let galley = painter.layout_no_wrap(
-        label.name.clone(),
-        FontId::proportional(11.5),
-        Color32::WHITE,
-    );
+fn paint_ref(painter: &egui::Painter, label: &RefLabel, x: f32, y: f32) -> f32 {
+    let style = ref_style(label.kind);
+    let galley = painter.layout_no_wrap(label.name.clone(), theme::font_semibold(11.0), style.text);
+    let icon_width = if style.icon.is_some() {
+        10.0 + 4.0
+    } else {
+        0.0
+    };
     let rect = Rect::from_min_size(
-        pos2(x, row.center().y - galley.size().y / 2.0 - 2.0),
-        galley.size() + vec2(10.0, 4.0),
+        pos2(x, y - 10.0),
+        vec2(7.0 + icon_width + galley.size().x + 7.0, 20.0),
     );
     painter.rect(
         rect,
-        CornerRadius::same(4),
-        fill,
-        Stroke::NONE,
+        5.0,
+        style.fill,
+        style.stroke,
         egui::StrokeKind::Inside,
     );
-    painter.galley(rect.min + vec2(5.0, 2.0), galley, Color32::WHITE);
+    let mut tx = rect.left() + 7.0;
+    if let Some(icon) = style.icon {
+        icons::paint(
+            painter,
+            Rect::from_center_size(pos2(tx + 5.0, y), vec2(10.0, 10.0)),
+            icon,
+            style.text,
+            2.4,
+        );
+        tx += icon_width;
+    }
+    painter.galley(pos2(tx, y - galley.size().y / 2.0), galley, style.text);
     rect.right()
 }
 
-pub fn ref_color(kind: RefKind) -> Color32 {
+struct RefStyle {
+    fill: Color32,
+    stroke: Stroke,
+    text: Color32,
+    icon: Option<Icon>,
+}
+
+fn ref_style(kind: RefKind) -> RefStyle {
+    let soft = |c: Color32, text: Color32, icon| RefStyle {
+        fill: theme::alpha(c, 0.14),
+        stroke: Stroke::new(1.0, theme::alpha(c, 0.4)),
+        text,
+        icon,
+    };
     match kind {
-        RefKind::Head => Color32::from_rgb(190, 60, 60),
-        RefKind::Branch { current: true } => Color32::from_rgb(30, 150, 70),
-        RefKind::Branch { current: false } => Color32::from_rgb(70, 110, 80),
-        RefKind::Remote => Color32::from_rgb(70, 100, 170),
-        RefKind::Tag => Color32::from_rgb(170, 130, 40),
+        RefKind::Branch { current: true } => RefStyle {
+            fill: theme::ACCENT,
+            stroke: Stroke::NONE,
+            text: theme::TEXT_ON_ACCENT,
+            icon: Some(Icon::BranchSmall),
+        },
+        RefKind::Branch { current: false } => {
+            soft(theme::ORANGE, theme::ORANGE_TEXT, Some(Icon::BranchSmall))
+        }
+        RefKind::Remote => RefStyle {
+            fill: Color32::TRANSPARENT,
+            stroke: Stroke::new(1.0, theme::BORDER_BADGE),
+            text: theme::TEXT_SOFT,
+            icon: Some(Icon::Cloud),
+        },
+        RefKind::Tag => soft(theme::YELLOW, theme::YELLOW, None),
+        RefKind::Head => soft(theme::RED, theme::RED, None),
     }
 }

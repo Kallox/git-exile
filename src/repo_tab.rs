@@ -698,30 +698,34 @@ impl RepoTab {
                 });
         }
 
-        egui::CentralPanel::default().show_inside(ui, |ui| {
-            let changes = self
-                .status
-                .as_ref()
-                .filter(|s| !s.is_clean())
-                .map(|s| s.change_count());
-            if self.commits.is_empty() && changes.is_none() && !self.log_loading {
-                ui.weak("Este repositorio todavía no tiene commits.");
-            }
-            let resp = self
-                .list
-                .show(ui, &self.commits, &self.graph, self.selected, changes);
-            if let Some(row) = resp.selected {
-                actions.push(Action::Select(row));
-            }
-            if resp.wants_more {
-                actions.push(Action::LoadMore);
-            }
-            match resp.context {
-                Some(ContextAction::CreateBranch(i)) => actions.push(Action::NewBranch(Some(i))),
-                Some(ContextAction::SwitchBranch(name)) => actions.push(Action::SwitchTo(name)),
-                None => {}
-            }
-        });
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new())
+            .show_inside(ui, |ui| {
+                let changes = self
+                    .status
+                    .as_ref()
+                    .filter(|s| !s.is_clean())
+                    .map(|s| s.change_count());
+                if self.commits.is_empty() && changes.is_none() && !self.log_loading {
+                    ui.weak("Este repositorio todavía no tiene commits.");
+                }
+                let resp =
+                    self.list
+                        .show(ui, &self.commits, &self.graph, self.selected, changes, None);
+                if let Some(row) = resp.selected {
+                    actions.push(Action::Select(row));
+                }
+                if resp.wants_more {
+                    actions.push(Action::LoadMore);
+                }
+                match resp.context {
+                    Some(ContextAction::CreateBranch(i)) => {
+                        actions.push(Action::NewBranch(Some(i)))
+                    }
+                    Some(ContextAction::SwitchBranch(name)) => actions.push(Action::SwitchTo(name)),
+                    None => {}
+                }
+            });
     }
 
     fn details_panel(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
