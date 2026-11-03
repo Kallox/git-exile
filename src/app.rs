@@ -72,6 +72,7 @@ pub struct GitExileApp {
 
 impl GitExileApp {
     pub fn new(cc: &eframe::CreationContext<'_>, paths: Vec<PathBuf>) -> Self {
+        crate::ui::theme::apply(&cc.egui_ctx);
         let storage = cc.storage;
         let recent: Vec<PathBuf> = storage
             .and_then(|s| eframe::get_value(s, RECENT_KEY))

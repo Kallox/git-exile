@@ -6,8 +6,10 @@ pub mod commit_editor;
 pub mod commit_list;
 pub mod diff_view;
 pub mod graph_view;
+pub mod icons;
 pub mod repo_browser;
 pub mod status_panel;
+pub mod theme;
 
 use chrono::{Local, TimeZone};
 
