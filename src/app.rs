@@ -5,6 +5,7 @@ use eframe::egui;
 use crate::git::{self, Commit, CommitDetails, Graph, Repo};
 use crate::ui::commit_details::{self, DetailsAction};
 use crate::ui::commit_list::CommitList;
+use crate::ui::diff_view;
 use crate::worker::Worker;
 
 const RECENT_KEY: &str = "recent_repositories";
@@ -311,11 +312,23 @@ fn details_panel(ui: &mut egui::Ui, state: &mut RepoState, actions: &mut Vec<Act
         });
         return;
     };
-    if let Some(DetailsAction::SelectCommit(id)) =
-        commit_details::show(ui, details, &mut state.selected_file)
-    {
-        actions.push(Action::SelectId(id));
-    }
+    egui::SidePanel::left("commit_info")
+        .resizable(true)
+        .default_width(ui.available_width() * 0.4)
+        .min_width(200.0)
+        .show_inside(ui, |ui| {
+            if let Some(DetailsAction::SelectCommit(id)) =
+                commit_details::show(ui, details, &mut state.selected_file)
+            {
+                actions.push(Action::SelectId(id));
+            }
+        });
+    egui::CentralPanel::default().show_inside(ui, |ui| {
+        match state.selected_file.and_then(|i| details.files.get(i)) {
+            Some(file) => diff_view::show(ui, file),
+            None => diff_view::placeholder(ui, "Selecciona un archivo para ver el diff."),
+        }
+    });
 }
 
 fn repo_view(ui: &mut egui::Ui, state: &mut RepoState, actions: &mut Vec<Action>) {

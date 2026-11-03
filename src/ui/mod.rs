@@ -2,6 +2,7 @@
 
 pub mod commit_details;
 pub mod commit_list;
+pub mod diff_view;
 pub mod graph_view;
 
 use chrono::{Local, TimeZone};
