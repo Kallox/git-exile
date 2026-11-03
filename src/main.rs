@@ -1,9 +1,13 @@
 mod app;
 mod git;
 
+use std::path::PathBuf;
+
 use app::GitExileApp;
 
 fn main() -> eframe::Result<()> {
+    let initial_path = std::env::args_os().nth(1).map(PathBuf::from);
+
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("git-exile")
@@ -15,6 +19,6 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "git-exile",
         options,
-        Box::new(|cc| Ok(Box::new(GitExileApp::new(cc)))),
+        Box::new(|cc| Ok(Box::new(GitExileApp::new(cc, initial_path)))),
     )
 }
