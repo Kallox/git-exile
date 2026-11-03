@@ -17,6 +17,8 @@ credential helpers, etc.).
 - Vista de cambios sin commitear: archivos sin añadir, preparados para commit y en conflicto.
 - Añadir y quitar archivos del índice, de uno en uno o todos a la vez.
 - Editor de commits con resumen, descripción y opción de amend.
+- Crear ramas a partir del commit seleccionado (por defecto HEAD), con opción de cambiar a ellas.
+- Cambiar entre todas las ramas locales y remotas desde un selector con filtro.
 - Refresco manual, con F5 o automático al volver a la ventana.
 - Varios repositorios abiertos a la vez en pestañas. Las pestañas abiertas se recuerdan entre sesiones.
 - Buscador de repositorios integrado: navegar por carpetas, filtrar, buscar repositorios de forma
@@ -57,6 +59,19 @@ El botón "+" de la barra de pestañas (o Ctrl+T) abre el buscador en una pesta�
 
 En el panel izquierdo están los repositorios abiertos y los recientes para abrirlos directamente.
 
+### Ramas
+
+- **Crear una rama**: botón "Nueva rama" de la barra del repositorio. Parte del commit seleccionado en la
+  lista o, si no hay ninguno (o está seleccionada la fila de cambios sin commitear), de HEAD. También se
+  puede hacer con clic derecho sobre un commit, "Crear rama aquí…". Por defecto se cambia a la rama nueva.
+- **Cambiar de rama**: el botón "Rama: ..." abre la lista de ramas locales y remotas. Se puede filtrar
+  escribiendo y pulsar Enter para cambiar a la primera que coincida. Al elegir una rama remota se cambia a
+  la rama local del mismo nombre, o se crea una que la siga. Con clic derecho sobre un commit también se
+  puede cambiar a las ramas que apuntan a él.
+
+Los cambios sin commitear se mantienen al cambiar de rama; si chocan con la rama de destino, git rechaza
+el cambio y se muestra su mensaje.
+
 ## Atajos de teclado
 
 | Tecla | Acción |
@@ -88,6 +103,7 @@ src/
 │   ├── graph.rs         Cálculo de carriles del grafo
 │   ├── details.rs       Detalles de un commit
 │   ├── diff.rs          Parser de diffs unificados
+│   ├── branch.rs        Listar, crear y cambiar de rama
 │   ├── status.rs        Estado del working tree
 │   ├── worktree.rs      Diffs de cambios sin commitear
 │   └── commit.rs        Añadir/quitar del índice y crear commits
@@ -98,6 +114,7 @@ src/
     ├── diff_view.rs
     ├── status_panel.rs
     ├── commit_editor.rs
+    ├── branch_dialog.rs Diálogo de nueva rama
     └── repo_browser.rs  Buscador de repositorios
 ```
 
