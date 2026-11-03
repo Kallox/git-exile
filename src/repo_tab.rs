@@ -36,6 +36,7 @@ pub enum RepoMessage {
     LastMessage(git::Result<String>),
     Ident(git::Result<String>),
     BranchCreated(git::Result<()>),
+    Branches(git::Result<Vec<git::Branch>>),
 }
 
 /// Lanza trabajos en el worker etiquetados con la pestaña que los pidió.
@@ -109,6 +110,8 @@ pub struct RepoTab {
     reselect: Option<String>,
     pub error: Option<String>,
     new_branch: Option<NewBranchDialog>,
+    branches: Vec<git::Branch>,
+    branch_filter: String,
 }
 
 impl RepoTab {
@@ -135,6 +138,8 @@ impl RepoTab {
             reselect: None,
             error: None,
             new_branch: None,
+            branches: Vec::new(),
+            branch_filter: String::new(),
         };
         // El worker procesa en orden: el estado llega antes que el log.
         tab.refresh_status(jobs);
@@ -186,6 +191,8 @@ impl RepoTab {
                 git::load_status(&repo).and_then(|s| Ok((s, repo.refs_fingerprint()?))),
             )
         });
+        let repo = self.repo.clone();
+        jobs.spawn(move || RepoMessage::Branches(git::list_branches(&repo)));
     }
 
     fn select(&mut self, row: ListRow, jobs: &mut Jobs) {
@@ -399,6 +406,10 @@ impl RepoTab {
                     }
                 }
             },
+            RepoMessage::Branches(result) => match result {
+                Ok(branches) => self.branches = branches,
+                Err(e) => self.error = Some(format!("Error leyendo las ramas: {e}")),
+            },
             RepoMessage::Done(result) => {
                 if let Err(e) = result {
                     self.error = Some(e.to_string());
@@ -524,10 +535,7 @@ impl RepoTab {
         ui.horizontal(|ui| {
             ui.strong(self.repo.name())
                 .on_hover_text(self.repo.root().display().to_string());
-            ui.label(match &self.branch {
-                Some(b) => format!("rama: {b}"),
-                None => "HEAD separado".to_owned(),
-            });
+            self.branch_menu(ui, actions);
             if let Some(status) = &self.status
                 && let Some(upstream) = &status.upstream
             {
@@ -570,6 +578,85 @@ impl RepoTab {
         }
         if close {
             self.error = None;
+        }
+    }
+
+    /// Menú para cambiar de rama, con filtro por nombre.
+    fn branch_menu(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+        let label = match &self.branch {
+            Some(b) => format!("Rama: {b}"),
+            None => "HEAD separado".to_owned(),
+        };
+        let resp = ui.menu_button(label, |ui| {
+            ui.set_min_width(280.0);
+            let filter = ui.add(
+                egui::TextEdit::singleline(&mut self.branch_filter)
+                    .hint_text("Filtrar ramas")
+                    .desired_width(f32::INFINITY),
+            );
+            filter.request_focus();
+            let needle = self.branch_filter.to_lowercase();
+            let matches =
+                |b: &&git::Branch| needle.is_empty() || b.name.to_lowercase().contains(&needle);
+            let local: Vec<&git::Branch> = self
+                .branches
+                .iter()
+                .filter(|b| !b.remote)
+                .filter(matches)
+                .collect();
+            let remote: Vec<&git::Branch> = self
+                .branches
+                .iter()
+                .filter(|b| b.remote)
+                .filter(matches)
+                .collect();
+
+            // Enter cambia a la primera rama que coincide.
+            let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if enter && let Some(first) = local.iter().chain(&remote).find(|b| !b.current) {
+                actions.push(Action::SwitchTo(first.name.clone()));
+                ui.close();
+                return;
+            }
+
+            egui::ScrollArea::vertical()
+                .max_height(400.0)
+                .show(ui, |ui| {
+                    for (title, list) in [("Locales", &local), ("Remotas", &remote)] {
+                        if list.is_empty() {
+                            continue;
+                        }
+                        ui.add_space(4.0);
+                        ui.weak(title);
+                        for branch in list.iter() {
+                            let mut text = egui::RichText::new(&branch.name);
+                            if branch.current {
+                                text = text.strong();
+                            }
+                            let resp = ui
+                                .add_enabled(!branch.current, egui::Button::new(text).frame(false))
+                                .on_disabled_hover_text("Rama actual");
+                            let resp = match &branch.upstream {
+                                Some(up) => resp.on_hover_text(format!("Sigue a {up}")),
+                                None => resp,
+                            };
+                            if resp.clicked() {
+                                actions.push(Action::SwitchTo(branch.name.clone()));
+                                ui.close();
+                            }
+                        }
+                    }
+                    if local.is_empty() && remote.is_empty() {
+                        ui.weak("Ninguna rama coincide.");
+                    }
+                });
+        });
+        resp.response.on_hover_text(
+            "Cambiar de rama. Los cambios sin commitear se mantienen si no hay conflicto.",
+        );
+        // Al cerrar el menú se limpia el filtro.
+        if resp.inner.is_none() {
+            self.branch_filter.clear();
         }
     }
 
