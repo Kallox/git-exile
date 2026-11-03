@@ -1,6 +1,7 @@
 //! Componentes de la interfaz.
 
 pub mod commit_details;
+pub mod commit_editor;
 pub mod commit_list;
 pub mod diff_view;
 pub mod graph_view;

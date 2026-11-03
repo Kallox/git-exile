@@ -48,10 +48,15 @@ fn check<S: AsRef<OsStr>>(args: &[S], output: Output) -> Result<String> {
             .map(|a| a.as_ref().to_string_lossy())
             .collect::<Vec<_>>()
             .join(" ");
+        // Algunos comandos (p. ej. `commit` sin cambios) explican el fallo por stdout.
+        let mut stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        if stderr.is_empty() {
+            stderr = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        }
         Err(GitError::Failed {
             args,
             code: output.status.code().unwrap_or(-1),
-            stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+            stderr,
         })
     }
 }

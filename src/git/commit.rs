@@ -41,6 +41,37 @@ pub fn unstage_all(repo: &Repo) -> Result<()> {
     }
 }
 
+/// Crea un commit con lo que hay en el índice. Git aplica la configuración
+/// del usuario: identidad, hooks, firma, plantillas de limpieza, etc.
+/// Devuelve el hash del nuevo commit.
+pub fn create_commit(repo: &Repo, message: &str, amend: bool) -> Result<String> {
+    let mut args = vec!["commit", "-F", "-"];
+    if amend {
+        args.push("--amend");
+    }
+    repo.git_with_stdin(&args, message.as_bytes())?;
+    Ok(repo.git(&["rev-parse", "HEAD"])?.trim().to_owned())
+}
+
+/// Mensaje completo del último commit (para hacer amend).
+pub fn last_commit_message(repo: &Repo) -> Result<String> {
+    Ok(repo
+        .git(&["log", "-1", "--format=%B"])?
+        .trim_end()
+        .to_owned())
+}
+
+/// Identidad con la que git firmará los commits, p. ej. `Nombre <correo>`.
+pub fn author_ident(repo: &Repo) -> Result<String> {
+    let ident = repo.git(&["var", "GIT_AUTHOR_IDENT"])?;
+    // Formato: `Nombre <correo> 1700000000 +0100`
+    let ident = ident.trim();
+    Ok(match ident.rfind('>') {
+        Some(end) => ident[..=end].to_owned(),
+        None => ident.to_owned(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -75,6 +106,43 @@ mod tests {
         assert!(status(&t).staged.is_empty());
         stage_all(&repo).unwrap();
         assert_eq!(status(&t).staged.len(), 3);
+    }
+
+    #[test]
+    fn creates_and_amends_commits() {
+        let t = TestRepo::new();
+        t.write("a.txt", "1\n");
+        let repo = Repo::open(t.path()).unwrap();
+        stage_all(&repo).unwrap();
+
+        let id = create_commit(&repo, "Primer commit\n\nCon cuerpo", false).unwrap();
+        assert_eq!(id, t.git(&["rev-parse", "HEAD"]).trim());
+        assert_eq!(
+            last_commit_message(&repo).unwrap(),
+            "Primer commit\n\nCon cuerpo"
+        );
+        assert!(status(&t).is_clean());
+
+        let amended = create_commit(&repo, "Corregido", true).unwrap();
+        assert_ne!(amended, id);
+        assert_eq!(last_commit_message(&repo).unwrap(), "Corregido");
+        assert_eq!(t.git(&["rev-list", "--count", "HEAD"]).trim(), "1");
+    }
+
+    #[test]
+    fn commit_errors_are_reported() {
+        let t = TestRepo::new();
+        let repo = Repo::open(t.path()).unwrap();
+        // Nada en el índice.
+        let err = create_commit(&repo, "vacío", false).unwrap_err();
+        assert!(err.to_string().contains("nothing"), "{err}");
+    }
+
+    #[test]
+    fn reads_author_identity() {
+        let t = TestRepo::new();
+        let repo = Repo::open(t.path()).unwrap();
+        assert_eq!(author_ident(&repo).unwrap(), "Test <test@example.com>");
     }
 
     #[test]

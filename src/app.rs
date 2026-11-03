@@ -4,6 +4,7 @@ use eframe::egui;
 
 use crate::git::{self, Commit, CommitDetails, FileDiff, Graph, Repo, WorkingTreeStatus};
 use crate::ui::commit_details::{self, DetailsAction};
+use crate::ui::commit_editor::{CommitEditor, EditorAction};
 use crate::ui::commit_list::{CommitList, ListRow};
 use crate::ui::diff_view;
 use crate::ui::status_panel::{self, StatusAction, WtFile};
@@ -37,6 +38,9 @@ enum MessageKind {
     },
     /// Resultado de una operación que modifica el repositorio.
     Done(git::Result<()>),
+    Committed(git::Result<String>),
+    LastMessage(git::Result<String>),
+    Ident(git::Result<String>),
 }
 
 /// Lo que la interfaz pide hacer al terminar el frame.
@@ -49,6 +53,8 @@ enum Action {
     Unstage(Vec<String>),
     StageAll,
     UnstageAll,
+    Commit { message: String, amend: bool },
+    LoadLastMessage,
 }
 
 struct RepoState {
@@ -69,6 +75,9 @@ struct RepoState {
     status: Option<WorkingTreeStatus>,
     wt_file: Option<WtFile>,
     wt_diff: Option<FileDiff>,
+    editor: CommitEditor,
+    /// Identidad con la que se harán los commits (`git var GIT_AUTHOR_IDENT`).
+    author: Option<String>,
 }
 
 impl RepoState {
@@ -88,6 +97,8 @@ impl RepoState {
             status: None,
             wt_file: None,
             wt_diff: None,
+            editor: CommitEditor::default(),
+            author: None,
         }
     }
 
@@ -155,6 +166,20 @@ impl GitExileApp {
             skip,
             result: git::load_log(&repo, skip, LOG_PAGE),
         });
+    }
+
+    /// Vuelve a leer el historial desde el principio (p. ej. tras un commit).
+    fn reload_log(&mut self) {
+        let Some(state) = &mut self.repo else { return };
+        state.commits.clear();
+        state.graph = Graph::default();
+        state.log_complete = false;
+        state.log_loading = false;
+        if matches!(state.selected, Some(ListRow::Commit(_))) {
+            state.selected = None;
+            state.details = None;
+        }
+        self.load_log_page();
     }
 
     fn refresh_status(&mut self) {
@@ -245,6 +270,19 @@ impl GitExileApp {
                 self.run_op(move |repo| git::unstage(repo, &paths));
             }
             Action::StageAll => self.run_op(git::stage_all),
+            Action::Commit { message, amend } => {
+                let Some(state) = &mut self.repo else { return };
+                state.editor.committing = true;
+                let repo = state.repo.clone();
+                self.spawn(move || {
+                    MessageKind::Committed(git::create_commit(&repo, &message, amend))
+                });
+            }
+            Action::LoadLastMessage => {
+                let Some(state) = &self.repo else { return };
+                let repo = state.repo.clone();
+                self.spawn(move || MessageKind::LastMessage(git::last_commit_message(&repo)));
+            }
             Action::UnstageAll => self.run_op(git::unstage_all),
             Action::SelectId(id) => {
                 let index = self
@@ -264,6 +302,7 @@ impl GitExileApp {
     fn handle_messages(&mut self) {
         let mut select_initial = false;
         let mut reload_wt = false;
+        let mut reload_log = false;
         for msg in self.worker.poll() {
             if msg.epoch != self.epoch {
                 continue;
@@ -279,6 +318,8 @@ impl GitExileApp {
                     // El worker procesa en orden: el estado llega antes que el log.
                     self.refresh_status();
                     self.load_log_page();
+                    let repo = self.repo.as_ref().unwrap().repo.clone();
+                    self.spawn(move || MessageKind::Ident(git::author_ident(&repo)));
                 }
                 MessageKind::Opened(Err(e), path) => {
                     self.error = Some(format!("No se pudo abrir {}: {e}", path.display()));
@@ -334,6 +375,39 @@ impl GitExileApp {
                         Err(e) => self.error = Some(format!("Error leyendo el estado: {e}")),
                     }
                 }
+                MessageKind::Committed(result) => {
+                    let Some(state) = &mut self.repo else {
+                        continue;
+                    };
+                    state.editor.committing = false;
+                    match result {
+                        Ok(_) => {
+                            state.editor.clear();
+                            reload_log = true;
+                        }
+                        Err(e) => self.error = Some(format!("No se pudo crear el commit: {e}")),
+                    }
+                }
+                MessageKind::LastMessage(result) => {
+                    let Some(state) = &mut self.repo else {
+                        continue;
+                    };
+                    match result {
+                        Ok(message) if state.editor.amend => state.editor.set_message(&message),
+                        Ok(_) => {}
+                        Err(e) => self.error = Some(e.to_string()),
+                    }
+                }
+                MessageKind::Ident(result) => {
+                    let Some(state) = &mut self.repo else {
+                        continue;
+                    };
+                    match result {
+                        Ok(ident) => state.author = Some(ident),
+                        // Sin user.name/user.email: git lo explicará al hacer commit.
+                        Err(_) => state.author = None,
+                    }
+                }
                 MessageKind::Done(result) => {
                     if let Err(e) = result {
                         self.error = Some(e.to_string());
@@ -367,6 +441,13 @@ impl GitExileApp {
         }
         if reload_wt {
             self.after_status_change();
+        }
+        if reload_log {
+            self.refresh_status();
+            self.reload_log();
+            if let Some(state) = &mut self.repo {
+                state.list.scroll_to(ListRow::Commit(0));
+            }
         }
     }
 
@@ -507,6 +588,24 @@ fn worktree_panel(ui: &mut egui::Ui, state: &mut RepoState, actions: &mut Vec<Ac
         .default_width(ui.available_width() * 0.4)
         .min_width(200.0)
         .show_inside(ui, |ui| {
+            egui::TopBottomPanel::bottom("commit_editor")
+                .resizable(false)
+                .show_inside(ui, |ui| {
+                    ui.add_space(4.0);
+                    let editor_action =
+                        state
+                            .editor
+                            .show(ui, status.staged.len(), state.author.as_deref());
+                    match editor_action {
+                        Some(EditorAction::Commit { message, amend }) => {
+                            actions.push(Action::Commit { message, amend })
+                        }
+                        Some(EditorAction::LoadLastMessage) => {
+                            actions.push(Action::LoadLastMessage)
+                        }
+                        None => {}
+                    }
+                });
             if let Some(action) = status_panel::show(ui, status, state.wt_file.as_ref()) {
                 actions.push(match action {
                     StatusAction::Select(file) => Action::SelectWorktreeFile(file),
