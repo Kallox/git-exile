@@ -1,6 +1,6 @@
 //! Lista de archivos con cambios sin commitear.
 
-use eframe::egui::{Color32, RichText, ScrollArea, Ui};
+use eframe::egui::{Align, Color32, Layout, RichText, ScrollArea, Ui};
 
 use super::commit_details::{ADDED, REMOVED};
 use crate::git::{ChangeKind, StatusEntry, WorkingTreeStatus};
@@ -42,6 +42,18 @@ impl WtFile {
 
 pub enum StatusAction {
     Select(WtFile),
+    /// Añadir al índice. Las rutas incluyen la original en los renombrados.
+    Stage(Vec<String>),
+    Unstage(Vec<String>),
+    StageAll,
+    UnstageAll,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Section {
+    Conflicted,
+    Unstaged,
+    Staged,
 }
 
 pub fn show(
@@ -57,43 +69,57 @@ pub fn show(
             if !status.conflicted.is_empty() {
                 section(
                     ui,
-                    "Conflictos",
+                    Section::Conflicted,
                     &status.conflicted,
-                    false,
                     selected,
                     &mut action,
                 );
             }
             section(
                 ui,
-                "Sin añadir",
+                Section::Unstaged,
                 &status.unstaged,
-                false,
                 selected,
                 &mut action,
             );
-            section(
-                ui,
-                "Preparados para commit",
-                &status.staged,
-                true,
-                selected,
-                &mut action,
-            );
+            section(ui, Section::Staged, &status.staged, selected, &mut action);
         });
     action
 }
 
 fn section(
     ui: &mut Ui,
-    title: &str,
+    kind: Section,
     entries: &[StatusEntry],
-    staged: bool,
     selected: Option<&WtFile>,
     action: &mut Option<StatusAction>,
 ) {
+    let staged = kind == Section::Staged;
+    let title = match kind {
+        Section::Conflicted => "Conflictos",
+        Section::Unstaged => "Sin añadir",
+        Section::Staged => "Preparados para commit",
+    };
     ui.add_space(4.0);
-    ui.strong(format!("{title} ({})", entries.len()));
+    ui.horizontal(|ui| {
+        ui.strong(format!("{title} ({})", entries.len()));
+        if entries.is_empty() {
+            return;
+        }
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| match kind {
+            Section::Unstaged => {
+                if ui.small_button("Añadir todo").clicked() {
+                    *action = Some(StatusAction::StageAll);
+                }
+            }
+            Section::Staged => {
+                if ui.small_button("Quitar todo").clicked() {
+                    *action = Some(StatusAction::UnstageAll);
+                }
+            }
+            Section::Conflicted => {}
+        });
+    });
     if entries.is_empty() {
         ui.weak("Nada");
     }
@@ -102,18 +128,40 @@ fn section(
             path: entry.path.clone(),
             staged,
         };
+        let paths = || {
+            let mut paths = vec![entry.path.clone()];
+            paths.extend(entry.orig_path.clone());
+            paths
+        };
+        let toggle = || {
+            if staged {
+                StatusAction::Unstage(paths())
+            } else {
+                StatusAction::Stage(paths())
+            }
+        };
         ui.horizontal(|ui| {
             kind_badge(ui, entry.kind);
             let label = match &entry.orig_path {
                 Some(orig) => format!("{orig} → {}", entry.path),
                 None => entry.path.clone(),
             };
-            if ui
-                .selectable_label(selected == Some(&file), label)
-                .clicked()
-            {
+            let resp = ui.selectable_label(selected == Some(&file), label);
+            if resp.double_clicked() {
+                *action = Some(toggle());
+            } else if resp.clicked() {
                 *action = Some(StatusAction::Select(file.clone()));
             }
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let (text, hint) = match kind {
+                    Section::Staged => ("Quitar", "Sacar del próximo commit"),
+                    Section::Unstaged => ("Añadir", "Añadir al próximo commit"),
+                    Section::Conflicted => ("Resuelto", "Marcar el conflicto como resuelto"),
+                };
+                if ui.small_button(text).on_hover_text(hint).clicked() {
+                    *action = Some(toggle());
+                }
+            });
         });
     }
 }

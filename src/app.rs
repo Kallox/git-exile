@@ -35,6 +35,8 @@ enum MessageKind {
         file: WtFile,
         result: git::Result<FileDiff>,
     },
+    /// Resultado de una operación que modifica el repositorio.
+    Done(git::Result<()>),
 }
 
 /// Lo que la interfaz pide hacer al terminar el frame.
@@ -43,6 +45,10 @@ enum Action {
     Select(ListRow),
     SelectId(String),
     SelectWorktreeFile(WtFile),
+    Stage(Vec<String>),
+    Unstage(Vec<String>),
+    StageAll,
+    UnstageAll,
 }
 
 struct RepoState {
@@ -207,11 +213,39 @@ impl GitExileApp {
         });
     }
 
+    /// Ejecuta una operación sobre el repo y después refresca el estado.
+    fn run_op(&mut self, op: impl FnOnce(&Repo) -> git::Result<()> + Send + 'static) {
+        let Some(state) = &self.repo else { return };
+        let repo = state.repo.clone();
+        self.spawn(move || MessageKind::Done(op(&repo)));
+        self.refresh_status();
+    }
+
+    /// Si el archivo seleccionado cambia de lista, la selección lo sigue.
+    fn follow_selection(&mut self, paths: &[String], staged: bool) {
+        let Some(state) = &mut self.repo else { return };
+        if let Some(file) = &mut state.wt_file
+            && paths.contains(&file.path)
+        {
+            file.staged = staged;
+        }
+    }
+
     fn apply(&mut self, action: Action) {
         match action {
             Action::LoadMore => self.load_log_page(),
             Action::Select(row) => self.select(row),
             Action::SelectWorktreeFile(file) => self.select_worktree_file(file),
+            Action::Stage(paths) => {
+                self.follow_selection(&paths, true);
+                self.run_op(move |repo| git::stage(repo, &paths));
+            }
+            Action::Unstage(paths) => {
+                self.follow_selection(&paths, false);
+                self.run_op(move |repo| git::unstage(repo, &paths));
+            }
+            Action::StageAll => self.run_op(git::stage_all),
+            Action::UnstageAll => self.run_op(git::unstage_all),
             Action::SelectId(id) => {
                 let index = self
                     .repo
@@ -298,6 +332,11 @@ impl GitExileApp {
                             reload_wt = true;
                         }
                         Err(e) => self.error = Some(format!("Error leyendo el estado: {e}")),
+                    }
+                }
+                MessageKind::Done(result) => {
+                    if let Err(e) = result {
+                        self.error = Some(e.to_string());
                     }
                 }
                 MessageKind::WorktreeDiff { file, result } => {
@@ -468,10 +507,14 @@ fn worktree_panel(ui: &mut egui::Ui, state: &mut RepoState, actions: &mut Vec<Ac
         .default_width(ui.available_width() * 0.4)
         .min_width(200.0)
         .show_inside(ui, |ui| {
-            if let Some(StatusAction::Select(file)) =
-                status_panel::show(ui, status, state.wt_file.as_ref())
-            {
-                actions.push(Action::SelectWorktreeFile(file));
+            if let Some(action) = status_panel::show(ui, status, state.wt_file.as_ref()) {
+                actions.push(match action {
+                    StatusAction::Select(file) => Action::SelectWorktreeFile(file),
+                    StatusAction::Stage(paths) => Action::Stage(paths),
+                    StatusAction::Unstage(paths) => Action::Unstage(paths),
+                    StatusAction::StageAll => Action::StageAll,
+                    StatusAction::UnstageAll => Action::UnstageAll,
+                });
             }
         });
     egui::CentralPanel::default().show_inside(ui, |ui| match &state.wt_diff {

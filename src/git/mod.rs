@@ -2,6 +2,7 @@
 //!
 //! Este módulo no depende de la interfaz gráfica.
 
+mod commit;
 mod details;
 mod diff;
 mod graph;
@@ -14,6 +15,7 @@ mod worktree;
 #[cfg(test)]
 pub(crate) mod testutil;
 
+pub use commit::{stage, stage_all, unstage, unstage_all};
 pub use details::{CommitDetails, Person, load_commit};
 pub use diff::{DIFF_ARGS, DiffLine, FileDiff, FileStatus, Hunk, LineKind, parse_diff};
 pub use graph::{Graph, GraphRow, Half};
