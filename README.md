@@ -13,7 +13,9 @@ credential helpers, etc.).
 - Etiquetas de ramas, ramas remotas, tags y HEAD en cada commit.
 - Carga paginada del historial, pensada para repositorios grandes.
 - Detalles del commit: autor, committer, mensaje completo, padres y archivos cambiados.
-- Visor de diffs con números de línea y colores. Soporta archivos nuevos, borrados, renombrados y binarios.
+- Búsqueda de commits por mensaje, autor, correo o hash.
+- Visor de diffs con números de línea y colores, en vista unificada o dividida (lado a lado). Soporta
+  archivos nuevos, borrados, renombrados y binarios.
 - Vista de cambios sin commitear: archivos sin añadir, preparados para commit y en conflicto.
 - Añadir y quitar archivos del índice, de uno en uno o todos a la vez.
 - Editor de commits con resumen, descripción y opción de amend.
@@ -30,6 +32,8 @@ credential helpers, etc.).
 - Rust 1.89 o superior.
 - `git` instalado y disponible en el `PATH` (se recomienda 2.31 o superior).
 - En Linux, las bibliotecas habituales de X11 o Wayland que necesita `eframe`.
+- Opcional: las fuentes Inter y JetBrains Mono (`pacman -S inter-font ttf-jetbrains-mono`). Si están
+  instaladas se usan automáticamente; si no, se usan las fuentes por defecto de egui.
 
 ## Compilación y uso
 
@@ -72,6 +76,12 @@ En el panel izquierdo están los repositorios abiertos y los recientes para abri
 Los cambios sin commitear se mantienen al cambiar de rama; si chocan con la rama de destino, git rechaza
 el cambio y se muestra su mensaje.
 
+### Buscar commits
+
+El campo "Buscar commit, autor o hash…" de la barra del repositorio (Ctrl+F) filtra la lista de commits.
+Mientras hay una búsqueda se oculta el grafo y se sigue cargando el historial hasta revisarlo entero.
+Escape vacía la búsqueda.
+
 ## Atajos de teclado
 
 | Tecla | Acción |
@@ -80,6 +90,7 @@ el cambio y se muestra su mensaje.
 | Re Pág / Av Pág | Saltar una página |
 | Inicio / Fin | Ir al primer / último commit cargado |
 | F5 | Refrescar el repositorio |
+| Ctrl+F | Buscar commits |
 | Ctrl+T | Nueva pestaña con el buscador de repositorios |
 | Ctrl+W | Cerrar la pestaña activa |
 | Ctrl+Tab / Ctrl+Shift+Tab | Pestaña siguiente / anterior |
@@ -115,6 +126,8 @@ src/
     ├── status_panel.rs
     ├── commit_editor.rs
     ├── branch_dialog.rs Diálogo de nueva rama
+    ├── theme.rs         Paleta de colores, fuentes y estilo global
+    ├── icons.rs         Iconos vectoriales y botones
     └── repo_browser.rs  Buscador de repositorios
 ```
 
