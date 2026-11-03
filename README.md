@@ -18,6 +18,9 @@ credential helpers, etc.).
 - Añadir y quitar archivos del índice, de uno en uno o todos a la vez.
 - Editor de commits con resumen, descripción y opción de amend.
 - Refresco manual, con F5 o automático al volver a la ventana.
+- Varios repositorios abiertos a la vez en pestañas. Las pestañas abiertas se recuerdan entre sesiones.
+- Buscador de repositorios integrado: navegar por carpetas, filtrar, buscar repositorios de forma
+  recursiva y abrirlos con "Abrir repositorio".
 - Lista de repositorios recientes.
 
 ## Requisitos
@@ -32,14 +35,27 @@ credential helpers, etc.).
 cargo build --release
 ```
 
-Abrir un repositorio concreto:
+Abrir uno o varios repositorios, cada uno en su pestaña:
 
 ```sh
-cargo run --release -- /ruta/al/repositorio
+cargo run --release -- /ruta/al/repositorio /ruta/a/otro
 ```
 
-Sin argumentos se abre el último repositorio usado. También se puede abrir uno desde el botón "Abrir…"
-o desde el menú "Recientes".
+Sin argumentos se restauran las pestañas de la última sesión. Si no hay ninguna, se muestra el buscador
+de repositorios.
+
+### Buscador de repositorios
+
+El botón "+" de la barra de pestañas (o Ctrl+T) abre el buscador en una pestaña nueva:
+
+- "Inicio" y "Subir" para moverse, o escribir una ruta y pulsar Enter.
+- Doble clic en una carpeta para entrar en ella. Las carpetas que son repositorios git aparecen marcadas.
+- "Filtrar carpetas" filtra por nombre la carpeta actual.
+- "Buscar repositorios aquí" busca repositorios dentro de la carpeta actual (hasta 5 niveles, sin entrar
+  en carpetas ocultas ni en `node_modules`, `target`, etc.).
+- "Abrir repositorio" abre la carpeta seleccionada, o la actual si es (o está dentro de) un repositorio.
+
+En el panel izquierdo están los repositorios abiertos y los recientes para abrirlos directamente.
 
 ## Atajos de teclado
 
@@ -49,16 +65,21 @@ o desde el menú "Recientes".
 | Re Pág / Av Pág | Saltar una página |
 | Inicio / Fin | Ir al primer / último commit cargado |
 | F5 | Refrescar el repositorio |
+| Ctrl+T | Nueva pestaña con el buscador de repositorios |
+| Ctrl+W | Cerrar la pestaña activa |
+| Ctrl+Tab / Ctrl+Shift+Tab | Pestaña siguiente / anterior |
 | Ctrl+Enter | Crear el commit desde el editor |
 
-En la vista de cambios, un doble clic sobre un archivo lo mueve entre "Sin añadir" y "Preparados para commit".
+Clic central sobre una pestaña también la cierra. En la vista de cambios, un doble clic sobre un archivo lo mueve entre "Sin añadir" y "Preparados para commit".
 
 ## Estructura del código
 
 ```
 src/
 ├── main.rs              Arranque de la aplicación
-├── app.rs               Estado de la aplicación y distribución de paneles
+├── app.rs               Pestañas, persistencia y reparto de mensajes
+├── repo_tab.rs          Estado y vista de un repositorio abierto
+├── browser.rs           Exploración de carpetas y búsqueda de repositorios
 ├── worker.rs            Hilo en segundo plano para las operaciones de git
 ├── git/                 Acceso a git (no depende de la interfaz)
 │   ├── runner.rs        Ejecución del binario git y manejo de errores
@@ -76,7 +97,8 @@ src/
     ├── commit_details.rs
     ├── diff_view.rs
     ├── status_panel.rs
-    └── commit_editor.rs
+    ├── commit_editor.rs
+    └── repo_browser.rs  Buscador de repositorios
 ```
 
 Las operaciones de git se ejecutan en un hilo aparte para que la interfaz no se bloquee. La salida de git
