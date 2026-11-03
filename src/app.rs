@@ -2,10 +2,11 @@ use std::path::PathBuf;
 
 use eframe::egui;
 
-use crate::git::{self, Commit, CommitDetails, Graph, Repo};
+use crate::git::{self, Commit, CommitDetails, FileDiff, Graph, Repo, WorkingTreeStatus};
 use crate::ui::commit_details::{self, DetailsAction};
-use crate::ui::commit_list::CommitList;
+use crate::ui::commit_list::{CommitList, ListRow};
 use crate::ui::diff_view;
+use crate::ui::status_panel::{self, StatusAction, WtFile};
 use crate::worker::Worker;
 
 const RECENT_KEY: &str = "recent_repositories";
@@ -29,13 +30,19 @@ enum MessageKind {
         id: String,
         result: git::Result<CommitDetails>,
     },
+    Status(git::Result<WorkingTreeStatus>),
+    WorktreeDiff {
+        file: WtFile,
+        result: git::Result<FileDiff>,
+    },
 }
 
 /// Lo que la interfaz pide hacer al terminar el frame.
 enum Action {
     LoadMore,
-    Select(usize),
+    Select(ListRow),
     SelectId(String),
+    SelectWorktreeFile(WtFile),
 }
 
 struct RepoState {
@@ -45,12 +52,17 @@ struct RepoState {
     graph: Graph,
     log_complete: bool,
     log_loading: bool,
-    selected: Option<usize>,
     list: CommitList,
+    selected: Option<ListRow>,
+
     details: Option<CommitDetails>,
     /// Commit cuyos detalles se están cargando.
     details_loading: Option<String>,
     selected_file: Option<usize>,
+
+    status: Option<WorkingTreeStatus>,
+    wt_file: Option<WtFile>,
+    wt_diff: Option<FileDiff>,
 }
 
 impl RepoState {
@@ -62,16 +74,19 @@ impl RepoState {
             graph: Graph::default(),
             log_complete: false,
             log_loading: false,
-            selected: None,
             list: CommitList::default(),
+            selected: None,
             details: None,
             details_loading: None,
             selected_file: None,
+            status: None,
+            wt_file: None,
+            wt_diff: None,
         }
     }
 
-    fn selected_commit(&self) -> Option<&Commit> {
-        self.selected.and_then(|i| self.commits.get(i))
+    fn has_changes(&self) -> bool {
+        self.status.as_ref().is_some_and(|s| !s.is_clean())
     }
 }
 
@@ -136,28 +151,67 @@ impl GitExileApp {
         });
     }
 
-    fn select(&mut self, index: usize) {
+    fn refresh_status(&mut self) {
+        let Some(state) = &self.repo else { return };
+        let repo = state.repo.clone();
+        self.spawn(move || MessageKind::Status(git::load_status(&repo)));
+    }
+
+    fn select(&mut self, row: ListRow) {
         let Some(state) = &mut self.repo else { return };
-        if state.selected == Some(index) {
-            return;
+        match row {
+            ListRow::WorkingTree => {
+                state.selected = Some(row);
+                let file = state
+                    .wt_file
+                    .clone()
+                    .or_else(|| state.status.as_ref().and_then(WtFile::first));
+                if let Some(file) = file {
+                    self.select_worktree_file(file);
+                }
+            }
+            ListRow::Commit(index) => {
+                if state.selected == Some(row) {
+                    return;
+                }
+                let Some(commit) = state.commits.get(index) else {
+                    return;
+                };
+                state.selected = Some(row);
+                let id = commit.id.clone();
+                let repo = state.repo.clone();
+                state.details_loading = Some(id.clone());
+                self.spawn(move || MessageKind::Details {
+                    result: git::load_commit(&repo, &id),
+                    id,
+                });
+            }
         }
-        let Some(commit) = state.commits.get(index) else {
+    }
+
+    fn select_worktree_file(&mut self, file: WtFile) {
+        let Some(state) = &mut self.repo else { return };
+        let Some(entry) = state.status.as_ref().and_then(|s| file.find(s)).cloned() else {
+            state.wt_file = None;
+            state.wt_diff = None;
             return;
         };
-        state.selected = Some(index);
-        let id = commit.id.clone();
+        if state.wt_file.as_ref() != Some(&file) {
+            state.wt_diff = None;
+        }
+        state.wt_file = Some(file.clone());
         let repo = state.repo.clone();
-        state.details_loading = Some(id.clone());
-        self.spawn(move || MessageKind::Details {
-            result: git::load_commit(&repo, &id),
-            id,
+        self.spawn(move || MessageKind::WorktreeDiff {
+            result: git::diff_entry(&repo, &entry, file.staged),
+            file,
         });
     }
 
     fn apply(&mut self, action: Action) {
         match action {
             Action::LoadMore => self.load_log_page(),
-            Action::Select(i) => self.select(i),
+            Action::Select(row) => self.select(row),
+            Action::SelectWorktreeFile(file) => self.select_worktree_file(file),
             Action::SelectId(id) => {
                 let index = self
                     .repo
@@ -165,16 +219,17 @@ impl GitExileApp {
                     .and_then(|s| s.commits.iter().position(|c| c.id == id));
                 if let Some(i) = index {
                     if let Some(state) = &mut self.repo {
-                        state.list.scroll_to(i);
+                        state.list.scroll_to(ListRow::Commit(i));
                     }
-                    self.select(i);
+                    self.select(ListRow::Commit(i));
                 }
             }
         }
     }
 
     fn handle_messages(&mut self) {
-        let mut select_first = false;
+        let mut select_initial = false;
+        let mut reload_wt = false;
         for msg in self.worker.poll() {
             if msg.epoch != self.epoch {
                 continue;
@@ -187,6 +242,8 @@ impl GitExileApp {
                     self.recent.truncate(MAX_RECENT);
                     self.repo = Some(RepoState::new(repo, branch));
                     self.error = None;
+                    // El worker procesa en orden: el estado llega antes que el log.
+                    self.refresh_status();
                     self.load_log_page();
                 }
                 MessageKind::Opened(Err(e), path) => {
@@ -200,7 +257,7 @@ impl GitExileApp {
                     match result {
                         Ok(page) if skip == state.commits.len() => {
                             state.log_complete = page.len() < LOG_PAGE;
-                            select_first = skip == 0 && !page.is_empty();
+                            select_initial |= skip == 0;
                             state.graph.extend(&page);
                             state.commits.extend(page);
                         }
@@ -230,10 +287,72 @@ impl GitExileApp {
                         }
                     }
                 }
+                MessageKind::Status(result) => {
+                    let Some(state) = &mut self.repo else {
+                        continue;
+                    };
+                    match result {
+                        Ok(status) => {
+                            state.branch = status.branch.clone();
+                            state.status = Some(status);
+                            reload_wt = true;
+                        }
+                        Err(e) => self.error = Some(format!("Error leyendo el estado: {e}")),
+                    }
+                }
+                MessageKind::WorktreeDiff { file, result } => {
+                    let Some(state) = &mut self.repo else {
+                        continue;
+                    };
+                    if state.wt_file.as_ref() != Some(&file) {
+                        continue;
+                    }
+                    match result {
+                        Ok(diff) => state.wt_diff = Some(diff),
+                        Err(e) => {
+                            state.wt_diff = None;
+                            self.error = Some(format!("Error leyendo el diff: {e}"));
+                        }
+                    }
+                }
             }
         }
-        if select_first {
-            self.select(0);
+
+        if select_initial && let Some(state) = &self.repo {
+            let row = if state.has_changes() {
+                ListRow::WorkingTree
+            } else {
+                ListRow::Commit(0)
+            };
+            self.select(row);
+        }
+        if reload_wt {
+            self.after_status_change();
+        }
+    }
+
+    /// Mantiene coherente la vista de cambios cuando cambia el estado.
+    fn after_status_change(&mut self) {
+        let Some(state) = &mut self.repo else { return };
+        if state.selected != Some(ListRow::WorkingTree) {
+            return;
+        }
+        if !state.has_changes() {
+            state.wt_file = None;
+            state.wt_diff = None;
+            if !state.commits.is_empty() {
+                self.select(ListRow::Commit(0));
+            }
+            return;
+        }
+        let status = state.status.as_ref().unwrap();
+        let file = state
+            .wt_file
+            .clone()
+            .filter(|f| f.find(status).is_some())
+            .or_else(|| WtFile::first(status));
+        if let Some(file) = file {
+            self.select_worktree_file(file);
         }
     }
 
@@ -277,6 +396,14 @@ impl GitExileApp {
                     None => "HEAD separado".to_owned(),
                 })
                 .on_hover_text(state.repo.root().display().to_string());
+                if let Some(status) = &state.status
+                    && let Some(upstream) = &status.upstream
+                {
+                    ui.weak(format!(
+                        "{upstream} (+{} / -{})",
+                        status.ahead, status.behind
+                    ));
+                }
             }
 
             if self.worker.is_busy() {
@@ -331,24 +458,61 @@ fn details_panel(ui: &mut egui::Ui, state: &mut RepoState, actions: &mut Vec<Act
     });
 }
 
+fn worktree_panel(ui: &mut egui::Ui, state: &mut RepoState, actions: &mut Vec<Action>) {
+    let Some(status) = &state.status else {
+        ui.spinner();
+        return;
+    };
+    egui::SidePanel::left("worktree_files")
+        .resizable(true)
+        .default_width(ui.available_width() * 0.4)
+        .min_width(200.0)
+        .show_inside(ui, |ui| {
+            if let Some(StatusAction::Select(file)) =
+                status_panel::show(ui, status, state.wt_file.as_ref())
+            {
+                actions.push(Action::SelectWorktreeFile(file));
+            }
+        });
+    egui::CentralPanel::default().show_inside(ui, |ui| match &state.wt_diff {
+        Some(diff) => diff_view::show(ui, diff),
+        None if state.wt_file.is_some() => {
+            ui.centered_and_justified(|ui| ui.spinner());
+        }
+        None => diff_view::placeholder(ui, "Selecciona un archivo para ver el diff."),
+    });
+}
+
 fn repo_view(ui: &mut egui::Ui, state: &mut RepoState, actions: &mut Vec<Action>) {
-    if state.selected_commit().is_some() {
+    // Si los cambios desaparecen, la fila deja de existir.
+    if state.selected == Some(ListRow::WorkingTree) && !state.has_changes() {
+        state.selected = None;
+    }
+    if state.selected.is_some() {
         egui::TopBottomPanel::bottom("details_panel")
             .resizable(true)
             .default_height(ui.available_height() * 0.55)
             .min_height(120.0)
-            .show_inside(ui, |ui| details_panel(ui, state, actions));
+            .show_inside(ui, |ui| match state.selected {
+                Some(ListRow::WorkingTree) => worktree_panel(ui, state, actions),
+                _ => details_panel(ui, state, actions),
+            });
     }
 
     egui::CentralPanel::default().show_inside(ui, |ui| {
-        if state.commits.is_empty() && !state.log_loading {
+        let changes = state
+            .status
+            .as_ref()
+            .filter(|s| !s.is_clean())
+            .map(|s| s.change_count());
+        if state.commits.is_empty() && changes.is_none() && !state.log_loading {
             ui.weak("Este repositorio todavía no tiene commits.");
         }
         let resp = state
             .list
-            .show(ui, &state.commits, &state.graph, state.selected);
-        if let Some(i) = resp.selected {
-            actions.push(Action::Select(i));
+            .show(ui, &state.commits, &state.graph, state.selected, changes);
+        if let Some(row) = resp.selected {
+            actions.push(Action::Select(row));
         }
         if resp.wants_more {
             actions.push(Action::LoadMore);

@@ -58,6 +58,22 @@ pub fn paint_row(painter: &Painter, rect: Rect, row: &GraphRow, is_head: bool, b
     }
 }
 
+/// Nodo hueco para la fila de cambios sin commitear, unido al commit de abajo.
+pub fn paint_worktree_node(painter: &Painter, rect: Rect, bg: Color32) {
+    let painter = painter.with_clip_rect(rect.intersect(painter.clip_rect()));
+    let x = lane_x(rect, 0);
+    let center = pos2(x, rect.center().y);
+    let grey = Color32::from_gray(140);
+    let stroke = Stroke::new(LINE_WIDTH, grey);
+    // Línea discontinua hacia HEAD.
+    let mut y = center.y;
+    while y < rect.bottom() {
+        painter.line_segment([pos2(x, y), pos2(x, (y + 3.0).min(rect.bottom()))], stroke);
+        y += 5.0;
+    }
+    painter.circle(center, NODE_RADIUS + 0.5, bg, Stroke::new(2.0, grey));
+}
+
 fn line(painter: &Painter, p0: Pos2, p1: Pos2, color: Color32) {
     let stroke = Stroke::new(LINE_WIDTH, color);
     if (p0.x - p1.x).abs() < f32::EPSILON {

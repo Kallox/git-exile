@@ -4,6 +4,7 @@ pub mod commit_details;
 pub mod commit_list;
 pub mod diff_view;
 pub mod graph_view;
+pub mod status_panel;
 
 use chrono::{Local, TimeZone};
 

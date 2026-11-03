@@ -14,10 +14,17 @@ const PADDING: f32 = 6.0;
 /// Cuántas filas antes del final se pide la siguiente página.
 const PREFETCH_ROWS: usize = 100;
 
+/// Fila de la lista: la de cambios sin commitear o un commit (por índice).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListRow {
+    WorkingTree,
+    Commit(usize),
+}
+
 #[derive(Default)]
 pub struct CommitList {
     /// Fila que hay que hacer visible en el próximo frame.
-    scroll_to: Option<usize>,
+    scroll_to: Option<ListRow>,
     last_offset: f32,
     last_height: f32,
 }
@@ -25,33 +32,69 @@ pub struct CommitList {
 #[derive(Default)]
 pub struct ListResponse {
     /// Nueva fila seleccionada (con el ratón o el teclado).
-    pub selected: Option<usize>,
+    pub selected: Option<ListRow>,
     /// La vista está cerca del final: conviene cargar más commits.
     pub wants_more: bool,
 }
 
+/// Convierte entre filas lógicas y posiciones en pantalla.
+#[derive(Clone, Copy)]
+struct Layout {
+    worktree: bool,
+    commits: usize,
+}
+
+impl Layout {
+    fn len(self) -> usize {
+        self.commits + self.worktree as usize
+    }
+
+    fn row(self, index: usize) -> ListRow {
+        match (self.worktree, index) {
+            (true, 0) => ListRow::WorkingTree,
+            (true, i) => ListRow::Commit(i - 1),
+            (false, i) => ListRow::Commit(i),
+        }
+    }
+
+    fn index(self, row: ListRow) -> Option<usize> {
+        match row {
+            ListRow::WorkingTree => self.worktree.then_some(0),
+            ListRow::Commit(i) => Some(i + self.worktree as usize),
+        }
+    }
+}
+
 impl CommitList {
     /// Hace visible la fila `row` en el próximo frame.
-    pub fn scroll_to(&mut self, row: usize) {
+    pub fn scroll_to(&mut self, row: ListRow) {
         self.scroll_to = Some(row);
     }
 
-    /// Dibuja la lista. `selected` es la fila seleccionada actualmente.
+    /// Dibuja la lista. `worktree_changes` es el número de archivos con cambios
+    /// sin commitear; si es `Some`, se añade una fila para ellos arriba.
     pub fn show(
         &mut self,
         ui: &mut Ui,
         commits: &[Commit],
         graph: &Graph,
-        selected: Option<usize>,
+        selected: Option<ListRow>,
+        worktree_changes: Option<usize>,
     ) -> ListResponse {
+        let layout = Layout {
+            worktree: worktree_changes.is_some(),
+            commits: commits.len(),
+        };
+        let selected_index = selected.and_then(|r| layout.index(r));
         let mut response = ListResponse::default();
-        if let Some(new) = self.keyboard(ui, commits.len(), selected) {
-            response.selected = Some(new);
+        if let Some(new) = self.keyboard(ui, layout.len(), selected_index) {
+            response.selected = Some(layout.row(new));
+            self.scroll_to = Some(layout.row(new));
         }
 
         let graph_width = graph_view::width(graph.max_width());
         let mut area = ScrollArea::vertical().auto_shrink(false);
-        if let Some(row) = self.scroll_to.take() {
+        if let Some(row) = self.scroll_to.take().and_then(|r| layout.index(r)) {
             let top = row as f32 * ROW_HEIGHT;
             let bottom = top + ROW_HEIGHT;
             if top < self.last_offset {
@@ -61,26 +104,37 @@ impl CommitList {
             }
         }
 
-        let output = area.show_rows(ui, ROW_HEIGHT, commits.len(), |ui, range| {
+        let output = area.show_rows(ui, ROW_HEIGHT, layout.len(), |ui, range| {
             ui.spacing_mut().item_spacing.y = 0.0;
-            if range.end + PREFETCH_ROWS >= commits.len() {
+            if range.end + PREFETCH_ROWS >= layout.len() {
                 response.wants_more = true;
             }
-            for i in range {
+            for index in range {
                 let (rect, resp) =
                     ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
-                let is_selected = response.selected.or(selected) == Some(i);
-                paint_row(
-                    ui,
-                    rect,
-                    &commits[i],
-                    graph.rows.get(i),
-                    graph_width,
-                    is_selected,
-                    resp.hovered(),
-                );
+                let row = layout.row(index);
+                let is_selected = response.selected.or(selected) == Some(row);
+                match row {
+                    ListRow::WorkingTree => paint_worktree_row(
+                        ui,
+                        rect,
+                        worktree_changes.unwrap_or(0),
+                        graph_width,
+                        is_selected,
+                        resp.hovered(),
+                    ),
+                    ListRow::Commit(i) => paint_row(
+                        ui,
+                        rect,
+                        &commits[i],
+                        graph.rows.get(i),
+                        graph_width,
+                        is_selected,
+                        resp.hovered(),
+                    ),
+                }
                 if resp.clicked() {
-                    response.selected = Some(i);
+                    response.selected = Some(row);
                 }
             }
         });
@@ -113,9 +167,54 @@ impl CommitList {
             }
         })?;
         let new = new.min(len - 1);
-        self.scroll_to = Some(new);
         (Some(new) != selected).then_some(new)
     }
+}
+
+fn row_background(ui: &Ui, rect: Rect, selected: bool, hovered: bool) -> Color32 {
+    let visuals = ui.visuals();
+    let bg = if selected {
+        visuals.selection.bg_fill
+    } else if hovered {
+        visuals.widgets.hovered.weak_bg_fill
+    } else {
+        visuals.panel_fill
+    };
+    if selected || hovered {
+        ui.painter().rect_filled(rect, 0.0, bg);
+    }
+    bg
+}
+
+fn paint_worktree_row(
+    ui: &Ui,
+    rect: Rect,
+    changes: usize,
+    graph_width: f32,
+    selected: bool,
+    hovered: bool,
+) {
+    let bg = row_background(ui, rect, selected, hovered);
+    let painter = ui.painter_at(rect);
+    let graph_rect = Rect::from_min_size(rect.min, vec2(graph_width, rect.height()));
+    graph_view::paint_worktree_node(&painter, graph_rect, bg);
+
+    let color = if selected {
+        ui.visuals().selection.stroke.color
+    } else {
+        ui.visuals().text_color()
+    };
+    let text = match changes {
+        1 => "Cambios sin commitear (1 archivo)".to_owned(),
+        n => format!("Cambios sin commitear ({n} archivos)"),
+    };
+    painter.text(
+        pos2(rect.left() + graph_width + PADDING, rect.center().y),
+        Align2::LEFT_CENTER,
+        text,
+        FontId::proportional(13.0),
+        color,
+    );
 }
 
 fn paint_row(
@@ -127,18 +226,9 @@ fn paint_row(
     selected: bool,
     hovered: bool,
 ) {
+    let bg = row_background(ui, rect, selected, hovered);
     let visuals = ui.visuals();
     let painter = ui.painter_at(rect);
-    let bg = if selected {
-        visuals.selection.bg_fill
-    } else if hovered {
-        visuals.widgets.hovered.weak_bg_fill
-    } else {
-        visuals.panel_fill
-    };
-    if selected || hovered {
-        painter.rect_filled(rect, 0.0, bg);
-    }
 
     if let Some(row) = graph_row {
         let is_head = commit

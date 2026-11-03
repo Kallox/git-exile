@@ -9,6 +9,7 @@ mod log;
 mod repo;
 mod runner;
 mod status;
+mod worktree;
 
 #[cfg(test)]
 pub(crate) mod testutil;
@@ -20,3 +21,4 @@ pub use log::{Commit, RefKind, RefLabel, load_log};
 pub use repo::Repo;
 pub use runner::{GitError, Result, run, run_with_stdin, version};
 pub use status::{ChangeKind, StatusEntry, WorkingTreeStatus, load_status};
+pub use worktree::diff_entry;
