@@ -2,6 +2,7 @@
 //!
 //! Este módulo no depende de la interfaz gráfica.
 
+mod branch;
 mod commit;
 mod details;
 mod diff;
@@ -15,6 +16,7 @@ mod worktree;
 #[cfg(test)]
 pub(crate) mod testutil;
 
+pub use branch::{Branch, create_branch, list_branches, switch_branch};
 pub use commit::{
     author_ident, create_commit, last_commit_message, stage, stage_all, unstage, unstage_all,
 };
