@@ -4,9 +4,10 @@ use eframe::egui;
 
 use crate::app::{Message, MessageKind};
 use crate::git::{self, Commit, CommitDetails, FileDiff, Graph, Repo, WorkingTreeStatus};
+use crate::ui::branch_dialog::{DialogAction, NewBranchDialog};
 use crate::ui::commit_details::{self, DetailsAction};
 use crate::ui::commit_editor::{CommitEditor, EditorAction};
-use crate::ui::commit_list::{CommitList, ListRow};
+use crate::ui::commit_list::{CommitList, ContextAction, ListRow};
 use crate::ui::diff_view;
 use crate::ui::status_panel::{self, StatusAction, WtFile};
 use crate::worker::Worker;
@@ -34,6 +35,7 @@ pub enum RepoMessage {
     Committed(git::Result<String>),
     LastMessage(git::Result<String>),
     Ident(git::Result<String>),
+    BranchCreated(git::Result<()>),
 }
 
 /// Lanza trabajos en el worker etiquetados con la pestaña que los pidió.
@@ -62,9 +64,22 @@ enum Action {
     Unstage(Vec<String>),
     StageAll,
     UnstageAll,
-    Commit { message: String, amend: bool },
+    Commit {
+        message: String,
+        amend: bool,
+    },
     LoadLastMessage,
     Refresh,
+    /// Abrir el diálogo de nueva rama desde un commit (o HEAD si es `None`).
+    NewBranch(Option<usize>),
+    CreateBranch {
+        name: String,
+        start: String,
+        checkout: bool,
+    },
+    CloseDialog,
+    /// Cambiar a una rama local por nombre.
+    SwitchTo(String),
 }
 
 pub struct RepoTab {
@@ -93,6 +108,7 @@ pub struct RepoTab {
     /// Commit a volver a seleccionar cuando se recargue el historial.
     reselect: Option<String>,
     pub error: Option<String>,
+    new_branch: Option<NewBranchDialog>,
 }
 
 impl RepoTab {
@@ -118,6 +134,7 @@ impl RepoTab {
             refs: None,
             reselect: None,
             error: None,
+            new_branch: None,
         };
         // El worker procesa en orden: el estado llega antes que el log.
         tab.refresh_status(jobs);
@@ -266,6 +283,30 @@ impl RepoTab {
                 let repo = self.repo.clone();
                 jobs.spawn(move || RepoMessage::LastMessage(git::last_commit_message(&repo)));
             }
+            Action::NewBranch(index) => self.open_new_branch(index),
+            Action::CreateBranch {
+                name,
+                start,
+                checkout,
+            } => {
+                if let Some(dialog) = &mut self.new_branch {
+                    dialog.busy = true;
+                }
+                let repo = self.repo.clone();
+                jobs.spawn(move || {
+                    RepoMessage::BranchCreated(git::create_branch(&repo, &name, &start, checkout))
+                });
+            }
+            Action::CloseDialog => self.new_branch = None,
+            Action::SwitchTo(name) => {
+                self.run_op(jobs, move |repo| {
+                    let branches = git::list_branches(repo)?;
+                    match branches.iter().find(|b| b.name == name) {
+                        Some(b) => git::switch_branch(repo, b, &branches),
+                        None => repo.git(&["switch", &name]).map(drop),
+                    }
+                });
+            }
             Action::SelectId(id) => {
                 if let Some(i) = self.commits.iter().position(|c| c.id == id) {
                     self.list.scroll_to(ListRow::Commit(i));
@@ -343,6 +384,21 @@ impl RepoTab {
             },
             // Sin user.name/user.email: git lo explicará al hacer commit.
             RepoMessage::Ident(result) => self.author = result.ok(),
+            RepoMessage::BranchCreated(result) => match result {
+                Ok(()) => {
+                    self.new_branch = None;
+                    // Las referencias cambian: se recarga el historial.
+                    self.refresh_status(jobs);
+                }
+                Err(e) => {
+                    if let Some(dialog) = &mut self.new_branch {
+                        dialog.busy = false;
+                        dialog.error = Some(e.to_string());
+                    } else {
+                        self.error = Some(e.to_string());
+                    }
+                }
+            },
             RepoMessage::Done(result) => {
                 if let Err(e) = result {
                     self.error = Some(e.to_string());
@@ -361,6 +417,30 @@ impl RepoTab {
                 }
             }
         }
+    }
+
+    /// Abre el diálogo de nueva rama. Sin commit indicado se usa HEAD.
+    fn open_new_branch(&mut self, index: Option<usize>) {
+        let describe = |c: &Commit| format!("{}  {}", c.short_id, c.summary);
+        let (start, label) = match index.and_then(|i| self.commits.get(i)) {
+            Some(c) => (c.id.clone(), describe(c)),
+            None => {
+                let head = self.commits.iter().find(|c| {
+                    c.refs.iter().any(|r| {
+                        matches!(
+                            r.kind,
+                            git::RefKind::Head | git::RefKind::Branch { current: true }
+                        )
+                    })
+                });
+                let label = match head {
+                    Some(c) => format!("HEAD ({})", describe(c)),
+                    None => "HEAD".to_owned(),
+                };
+                ("HEAD".to_owned(), label)
+            }
+        };
+        self.new_branch = Some(NewBranchDialog::new(start, label));
     }
 
     /// Selección tras cargar la primera página del historial.
@@ -420,6 +500,21 @@ impl RepoTab {
             self.toolbar(ui, &mut actions);
         });
         self.repo_view(ui, &mut actions);
+        if let Some(dialog) = &mut self.new_branch {
+            match dialog.show(ui.ctx()) {
+                Some(DialogAction::Create {
+                    name,
+                    start,
+                    checkout,
+                }) => actions.push(Action::CreateBranch {
+                    name,
+                    start,
+                    checkout,
+                }),
+                Some(DialogAction::Cancel) => actions.push(Action::CloseDialog),
+                None => {}
+            }
+        }
         for action in actions {
             self.apply(action, jobs);
         }
@@ -448,6 +543,21 @@ impl RepoTab {
                     .clicked()
                 {
                     actions.push(Action::Refresh);
+                }
+                let selected_commit = match self.selected {
+                    Some(ListRow::Commit(i)) => Some(i),
+                    _ => None,
+                };
+                let hint = match selected_commit.and_then(|i| self.commits.get(i)) {
+                    Some(c) => format!("Crear una rama en el commit {}", c.short_id),
+                    None => "Crear una rama en HEAD (el último commit)".to_owned(),
+                };
+                if ui
+                    .add_enabled(!self.commits.is_empty(), egui::Button::new("Nueva rama"))
+                    .on_hover_text(hint)
+                    .clicked()
+                {
+                    actions.push(Action::NewBranch(selected_commit));
                 }
             });
         });
@@ -496,6 +606,11 @@ impl RepoTab {
             }
             if resp.wants_more {
                 actions.push(Action::LoadMore);
+            }
+            match resp.context {
+                Some(ContextAction::CreateBranch(i)) => actions.push(Action::NewBranch(Some(i))),
+                Some(ContextAction::SwitchBranch(name)) => actions.push(Action::SwitchTo(name)),
+                None => {}
             }
         });
     }

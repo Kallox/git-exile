@@ -1,5 +1,6 @@
 //! Componentes de la interfaz.
 
+pub mod branch_dialog;
 pub mod commit_details;
 pub mod commit_editor;
 pub mod commit_list;

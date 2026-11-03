@@ -29,10 +29,17 @@ pub struct CommitList {
     last_height: f32,
 }
 
+/// Acciones del menú contextual de un commit.
+pub enum ContextAction {
+    CreateBranch(usize),
+    SwitchBranch(String),
+}
+
 #[derive(Default)]
 pub struct ListResponse {
     /// Nueva fila seleccionada (con el ratón o el teclado).
     pub selected: Option<ListRow>,
+    pub context: Option<ContextAction>,
     /// La vista está cerca del final: conviene cargar más commits.
     pub wants_more: bool,
 }
@@ -135,6 +142,28 @@ impl CommitList {
                 }
                 if resp.clicked() {
                     response.selected = Some(row);
+                }
+                if let ListRow::Commit(i) = row {
+                    resp.context_menu(|ui| {
+                        if ui.button("Crear rama aquí…").clicked() {
+                            response.context = Some(ContextAction::CreateBranch(i));
+                            ui.close();
+                        }
+                        for label in &commits[i].refs {
+                            if let RefKind::Branch { current: false } = label.kind
+                                && ui.button(format!("Cambiar a {}", label.name)).clicked()
+                            {
+                                response.context =
+                                    Some(ContextAction::SwitchBranch(label.name.clone()));
+                                ui.close();
+                            }
+                        }
+                        ui.separator();
+                        if ui.button("Copiar hash").clicked() {
+                            ui.ctx().copy_text(commits[i].id.clone());
+                            ui.close();
+                        }
+                    });
                 }
             }
         });
