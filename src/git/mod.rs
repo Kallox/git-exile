@@ -2,6 +2,7 @@
 //!
 //! Este módulo no depende de la interfaz gráfica.
 
+mod details;
 mod diff;
 mod graph;
 mod log;
@@ -11,6 +12,7 @@ mod runner;
 #[cfg(test)]
 pub(crate) mod testutil;
 
+pub use details::{CommitDetails, Person, load_commit};
 pub use diff::{DIFF_ARGS, DiffLine, FileDiff, FileStatus, Hunk, LineKind, parse_diff};
 pub use graph::{Graph, GraphRow, Half};
 pub use log::{Commit, RefKind, RefLabel, load_log};
