@@ -342,8 +342,3 @@ pub fn status_color(status: FileStatus) -> Color32 {
         FileStatus::Renamed | FileStatus::Copied => theme::BLUE,
     }
 }
-
-pub fn status_badge(ui: &mut Ui, status: FileStatus) {
-    let (rect, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
-    paint_badge(ui.painter(), rect, status.letter(), status_color(status));
-}

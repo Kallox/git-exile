@@ -806,12 +806,14 @@ impl RepoTab {
                     actions.push(Action::SelectId(id));
                 }
             });
-        egui::CentralPanel::default().show_inside(ui, |ui| {
-            match self.selected_file.and_then(|i| details.files.get(i)) {
-                Some(file) => diff_view::show(ui, file),
-                None => diff_view::placeholder(ui, "Selecciona un archivo para ver el diff."),
-            }
-        });
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(24, 20)))
+            .show_inside(ui, |ui| {
+                match self.selected_file.and_then(|i| details.files.get(i)) {
+                    Some(file) => diff_view::show(ui, file),
+                    None => diff_view::placeholder(ui, "Selecciona un archivo para ver el diff."),
+                }
+            });
     }
 
     fn worktree_panel(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
@@ -851,13 +853,15 @@ impl RepoTab {
                     });
                 }
             });
-        egui::CentralPanel::default().show_inside(ui, |ui| match &self.wt_diff {
-            Some(diff) => diff_view::show(ui, diff),
-            None if self.wt_file.is_some() => {
-                ui.centered_and_justified(|ui| ui.spinner());
-            }
-            None => diff_view::placeholder(ui, "Selecciona un archivo para ver el diff."),
-        });
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(24, 20)))
+            .show_inside(ui, |ui| match &self.wt_diff {
+                Some(diff) => diff_view::show(ui, diff),
+                None if self.wt_file.is_some() => {
+                    ui.centered_and_justified(|ui| ui.spinner());
+                }
+                None => diff_view::placeholder(ui, "Selecciona un archivo para ver el diff."),
+            });
     }
 }
 

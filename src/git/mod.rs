@@ -21,7 +21,7 @@ pub use commit::{
     author_ident, create_commit, last_commit_message, stage, stage_all, unstage, unstage_all,
 };
 pub use details::{CommitDetails, Person, load_commit};
-pub use diff::{DiffLine, FileDiff, FileStatus, LineKind};
+pub use diff::{DiffLine, FileDiff, FileStatus, Hunk, LineKind};
 pub use graph::{Graph, GraphRow, Half};
 pub use log::{Commit, RefKind, RefLabel, load_log};
 pub use repo::Repo;
