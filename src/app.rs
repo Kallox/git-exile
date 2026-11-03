@@ -31,7 +31,8 @@ enum MessageKind {
         id: String,
         result: git::Result<CommitDetails>,
     },
-    Status(git::Result<WorkingTreeStatus>),
+    /// Estado del working tree y huella de las referencias.
+    Status(git::Result<(WorkingTreeStatus, String)>),
     WorktreeDiff {
         file: WtFile,
         result: git::Result<FileDiff>,
@@ -55,6 +56,7 @@ enum Action {
     UnstageAll,
     Commit { message: String, amend: bool },
     LoadLastMessage,
+    Refresh,
 }
 
 struct RepoState {
@@ -78,6 +80,10 @@ struct RepoState {
     editor: CommitEditor,
     /// Identidad con la que se harán los commits (`git var GIT_AUTHOR_IDENT`).
     author: Option<String>,
+    /// Huella de ramas/tags/HEAD de la última lectura del estado.
+    refs: Option<String>,
+    /// Commit a volver a seleccionar cuando se recargue el historial.
+    reselect: Option<String>,
 }
 
 impl RepoState {
@@ -99,6 +105,8 @@ impl RepoState {
             wt_diff: None,
             editor: CommitEditor::default(),
             author: None,
+            refs: None,
+            reselect: None,
         }
     }
 
@@ -109,6 +117,8 @@ impl RepoState {
 
 pub struct GitExileApp {
     worker: Worker<Message>,
+    /// Si la ventana tenía el foco en el frame anterior.
+    focused: bool,
     epoch: u64,
     repo: Option<RepoState>,
     recent: Vec<PathBuf>,
@@ -124,6 +134,7 @@ impl GitExileApp {
 
         let mut app = Self {
             worker: Worker::new(cc.egui_ctx.clone()),
+            focused: true,
             epoch: 0,
             repo: None,
             recent,
@@ -171,21 +182,25 @@ impl GitExileApp {
     /// Vuelve a leer el historial desde el principio (p. ej. tras un commit).
     fn reload_log(&mut self) {
         let Some(state) = &mut self.repo else { return };
-        state.commits.clear();
         state.graph = Graph::default();
         state.log_complete = false;
         state.log_loading = false;
-        if matches!(state.selected, Some(ListRow::Commit(_))) {
+        if let Some(ListRow::Commit(i)) = state.selected {
+            state.reselect = state.commits.get(i).map(|c| c.id.clone());
             state.selected = None;
-            state.details = None;
         }
+        state.commits.clear();
         self.load_log_page();
     }
 
     fn refresh_status(&mut self) {
         let Some(state) = &self.repo else { return };
         let repo = state.repo.clone();
-        self.spawn(move || MessageKind::Status(git::load_status(&repo)));
+        self.spawn(move || {
+            MessageKind::Status(
+                git::load_status(&repo).and_then(|s| Ok((s, repo.refs_fingerprint()?))),
+            )
+        });
     }
 
     fn select(&mut self, row: ListRow) {
@@ -278,6 +293,7 @@ impl GitExileApp {
                     MessageKind::Committed(git::create_commit(&repo, &message, amend))
                 });
             }
+            Action::Refresh => self.refresh_status(),
             Action::LoadLastMessage => {
                 let Some(state) = &self.repo else { return };
                 let repo = state.repo.clone();
@@ -303,6 +319,7 @@ impl GitExileApp {
         let mut select_initial = false;
         let mut reload_wt = false;
         let mut reload_log = false;
+        let mut refresh = false;
         for msg in self.worker.poll() {
             if msg.epoch != self.epoch {
                 continue;
@@ -367,10 +384,15 @@ impl GitExileApp {
                         continue;
                     };
                     match result {
-                        Ok(status) => {
+                        Ok((status, refs)) => {
                             state.branch = status.branch.clone();
                             state.status = Some(status);
                             reload_wt = true;
+                            // Cambios hechos fuera (terminal, otro programa...).
+                            if state.refs.is_some() && state.refs.as_ref() != Some(&refs) {
+                                reload_log = true;
+                            }
+                            state.refs = Some(refs);
                         }
                         Err(e) => self.error = Some(format!("Error leyendo el estado: {e}")),
                     }
@@ -383,7 +405,8 @@ impl GitExileApp {
                     match result {
                         Ok(_) => {
                             state.editor.clear();
-                            reload_log = true;
+                            // El refresco del estado detecta el nuevo commit y recarga el log.
+                            refresh = true;
                         }
                         Err(e) => self.error = Some(format!("No se pudo crear el commit: {e}")),
                     }
@@ -431,23 +454,36 @@ impl GitExileApp {
             }
         }
 
-        if select_initial && let Some(state) = &self.repo {
-            let row = if state.has_changes() {
+        if select_initial && let Some(state) = &mut self.repo {
+            let reselect = state
+                .reselect
+                .take()
+                .and_then(|id| state.commits.iter().position(|c| c.id == id));
+            let row = if let Some(i) = reselect {
+                ListRow::Commit(i)
+            } else if state.selected == Some(ListRow::WorkingTree) || state.has_changes() {
                 ListRow::WorkingTree
             } else {
                 ListRow::Commit(0)
             };
-            self.select(row);
+            // Tras recargar, los detalles del commit siguen siendo válidos si es el mismo.
+            if let ListRow::Commit(i) = row
+                && state.details.as_ref().map(|d| &d.id) == Some(&state.commits[i].id)
+            {
+                state.selected = Some(row);
+                state.list.scroll_to(row);
+            } else {
+                self.select(row);
+            }
         }
         if reload_wt {
             self.after_status_change();
         }
-        if reload_log {
+        if refresh {
             self.refresh_status();
+        }
+        if reload_log {
             self.reload_log();
-            if let Some(state) = &mut self.repo {
-                state.list.scroll_to(ListRow::Commit(0));
-            }
         }
     }
 
@@ -506,6 +542,17 @@ impl GitExileApp {
             });
             if let Some(path) = to_open {
                 self.open(path);
+            }
+
+            let mut refresh = false;
+            if self.repo.is_some() {
+                refresh = ui
+                    .button("Refrescar")
+                    .on_hover_text("Volver a leer el repositorio (F5)")
+                    .clicked();
+            }
+            if refresh {
+                self.refresh_status();
             }
 
             if let Some(state) = &self.repo {
@@ -665,6 +712,14 @@ fn repo_view(ui: &mut egui::Ui, state: &mut RepoState, actions: &mut Vec<Action>
 impl eframe::App for GitExileApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.handle_messages();
+
+        // Refrescar con F5 o al volver a la ventana (puede haber cambios hechos fuera).
+        let focused = ctx.input(|i| i.focused);
+        let regained_focus = focused && !self.focused;
+        self.focused = focused;
+        if regained_focus || ctx.input(|i| i.key_pressed(egui::Key::F5)) {
+            self.apply(Action::Refresh);
+        }
 
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
             self.top_bar(ui);

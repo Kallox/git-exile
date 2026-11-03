@@ -63,6 +63,19 @@ impl Repo {
         }
     }
 
+    /// Texto que cambia cuando cambia cualquier rama, tag o HEAD.
+    /// Sirve para saber si hay que recargar el historial.
+    pub fn refs_fingerprint(&self) -> Result<String> {
+        let refs = self.git(&["for-each-ref", "--format=%(objectname) %(refname)"])?;
+        let head = match self.git(&["rev-parse", "-q", "--verify", "HEAD"]) {
+            Ok(h) => h,
+            Err(GitError::Failed { code: 1, .. }) => String::new(),
+            Err(e) => return Err(e),
+        };
+        let branch = self.current_branch()?.unwrap_or_default();
+        Ok(format!("{head}{branch}\n{refs}"))
+    }
+
     /// `true` si todavía no hay ningún commit.
     pub fn is_empty(&self) -> Result<bool> {
         match self.git(&["rev-parse", "--verify", "-q", "HEAD"]) {
@@ -108,5 +121,18 @@ mod tests {
 
         t.git(&["checkout", "-q", "--detach"]);
         assert_eq!(repo.current_branch().unwrap(), None);
+    }
+
+    #[test]
+    fn fingerprint_changes_with_refs() {
+        let t = TestRepo::new();
+        let repo = Repo::open(t.path()).unwrap();
+        let empty = repo.refs_fingerprint().unwrap();
+        t.commit_file("a.txt", "a\n", "first");
+        let one = repo.refs_fingerprint().unwrap();
+        assert_ne!(empty, one);
+        assert_eq!(one, repo.refs_fingerprint().unwrap());
+        t.git(&["tag", "v1"]);
+        assert_ne!(one, repo.refs_fingerprint().unwrap());
     }
 }
