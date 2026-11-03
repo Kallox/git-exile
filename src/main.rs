@@ -1,5 +1,6 @@
 mod app;
 mod git;
+mod worker;
 
 use std::path::PathBuf;
 
