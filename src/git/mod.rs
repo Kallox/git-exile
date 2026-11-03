@@ -2,6 +2,7 @@
 //!
 //! Este módulo no depende de la interfaz gráfica.
 
+mod graph;
 mod log;
 mod repo;
 mod runner;
@@ -9,6 +10,7 @@ mod runner;
 #[cfg(test)]
 pub(crate) mod testutil;
 
+pub use graph::{Graph, GraphRow, Half, Segment};
 pub use log::{Commit, RefKind, RefLabel, load_log};
 pub use repo::Repo;
 pub use runner::{GitError, Result, run, run_with_stdin, version};
