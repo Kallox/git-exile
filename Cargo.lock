@@ -1198,6 +1198,7 @@ name = "git-exile"
 version = "0.1.0"
 dependencies = [
  "eframe",
+ "tempfile",
  "thiserror 2.0.21",
 ]
 
