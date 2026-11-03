@@ -677,15 +677,13 @@ impl RepoTab {
                             continue;
                         }
                         ui.add_space(4.0);
-                        ui.weak(title);
+                        ui.label(
+                            egui::RichText::new(title.to_uppercase())
+                                .font(theme::font_semibold(11.0))
+                                .color(theme::TEXT_MUTED),
+                        );
                         for branch in list.iter() {
-                            let mut text = egui::RichText::new(&branch.name);
-                            if branch.current {
-                                text = text.strong();
-                            }
-                            let resp = ui
-                                .add_enabled(!branch.current, egui::Button::new(text).frame(false))
-                                .on_disabled_hover_text("Rama actual");
+                            let resp = branch_row(ui, branch);
                             let resp = match &branch.upstream {
                                 Some(up) => resp.on_hover_text(format!("Sigue a {up}")),
                                 None => resp,
@@ -1021,6 +1019,68 @@ fn search_box(ui: &mut egui::Ui, text: &mut String) {
                 edit.on_hover_text("Buscar en mensajes, autores y hashes (Ctrl+F)");
             });
         });
+}
+
+/// Fila del menú de ramas: icono, nombre y marca de la actual.
+fn branch_row(ui: &mut egui::Ui, branch: &git::Branch) -> egui::Response {
+    let sense = if branch.current {
+        egui::Sense::hover()
+    } else {
+        egui::Sense::click()
+    };
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 30.0), sense);
+    let painter = ui.painter();
+    if branch.current {
+        painter.rect_filled(rect, 6.0, theme::accent_soft());
+    } else if resp.hovered() {
+        painter.rect_filled(rect, 6.0, theme::BG_ACTIVE);
+    }
+    let icon = if branch.remote {
+        Icon::Cloud
+    } else {
+        Icon::BranchSmall
+    };
+    let (icon_color, font, text_color) = if branch.current {
+        (
+            theme::ACCENT,
+            theme::font_semibold(13.0),
+            theme::TEXT_STRONG,
+        )
+    } else {
+        (theme::TEXT_MUTED, theme::font(13.0), theme::TEXT)
+    };
+    icons::paint(
+        painter,
+        egui::Rect::from_center_size(
+            egui::pos2(rect.left() + 14.0, rect.center().y),
+            egui::vec2(12.0, 12.0),
+        ),
+        icon,
+        icon_color,
+        2.2,
+    );
+    painter.text(
+        egui::pos2(rect.left() + 30.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        &branch.name,
+        font,
+        text_color,
+    );
+    if branch.current {
+        icons::paint(
+            painter,
+            egui::Rect::from_center_size(
+                egui::pos2(rect.right() - 14.0, rect.center().y),
+                egui::vec2(12.0, 12.0),
+            ),
+            Icon::Check,
+            theme::ACCENT,
+            2.2,
+        );
+        resp.on_hover_text("Rama actual")
+    } else {
+        resp
+    }
 }
 
 #[cfg(test)]

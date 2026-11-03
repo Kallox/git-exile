@@ -38,7 +38,6 @@ pub const TEXT_ON_ACCENT: Color32 = Color32::from_rgb(0x14, 0x10, 0x1F);
 // Acento y colores de estado.
 pub const ACCENT: Color32 = Color32::from_rgb(0xA7, 0x8B, 0xFA);
 pub const LINK: Color32 = Color32::from_rgb(0xB9, 0xA4, 0xFF);
-pub const LINK_HOVER: Color32 = Color32::from_rgb(0xD6, 0xCB, 0xFF);
 pub const GREEN: Color32 = Color32::from_rgb(0x6F, 0xD3, 0xA8);
 pub const RED: Color32 = Color32::from_rgb(0xF2, 0x8B, 0x8B);
 pub const YELLOW: Color32 = Color32::from_rgb(0xF0, 0xC4, 0x5C);
@@ -122,7 +121,8 @@ fn visuals() -> egui::Visuals {
     v.warn_fg_color = YELLOW;
     v.error_fg_color = RED;
     v.selection.bg_fill = accent_selected();
-    v.selection.stroke = Stroke::new(1.0, TEXT_STRONG);
+    // Borde de los campos de texto activos.
+    v.selection.stroke = Stroke::new(1.0, ACCENT);
     v.override_text_color = None;
 
     let w = &mut v.widgets;
