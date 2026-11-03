@@ -262,7 +262,7 @@ fn header(ui: &mut Ui, graph_width: f32, show_graph: bool) {
     let cols = Columns::new(rect, graph_width);
     let y = rect.center().y;
     let font = theme::font_semibold(11.0);
-    let mut text = |x: f32, s: &str| {
+    let text = |x: f32, s: &str| {
         painter.text(
             pos2(x, y),
             Align2::LEFT_CENTER,

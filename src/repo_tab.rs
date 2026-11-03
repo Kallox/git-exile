@@ -114,6 +114,10 @@ pub struct RepoTab {
     new_branch: Option<NewBranchDialog>,
     branches: Vec<git::Branch>,
     branch_filter: String,
+    /// Texto del buscador de commits.
+    search: String,
+    /// Resultado de la última búsqueda: (texto, commits revisados, índices).
+    search_cache: Option<(String, usize, Vec<usize>)>,
 }
 
 impl RepoTab {
@@ -142,6 +146,8 @@ impl RepoTab {
             new_branch: None,
             branches: Vec::new(),
             branch_filter: String::new(),
+            search: String::new(),
+            search_cache: None,
         };
         // El worker procesa en orden: el estado llega antes que el log.
         tab.refresh_status(jobs);
@@ -579,8 +585,27 @@ impl RepoTab {
                 {
                     actions.push(Action::Refresh);
                 }
+                search_box(ui, &mut self.search);
             });
         });
+    }
+
+    /// Índices de los commits que coinciden con la búsqueda, o `None` sin búsqueda.
+    fn search_results(&mut self) -> Option<&[usize]> {
+        let query = self.search.trim().to_lowercase();
+        if query.is_empty() {
+            self.search_cache = None;
+            return None;
+        }
+        let stale = match &self.search_cache {
+            Some((q, n, _)) => *q != query || *n != self.commits.len(),
+            None => true,
+        };
+        if stale {
+            let found = search_commits(&self.commits, &query);
+            self.search_cache = Some((query, self.commits.len(), found));
+        }
+        self.search_cache.as_ref().map(|(_, _, v)| v.as_slice())
     }
 
     fn error_bar(&mut self, ui: &mut egui::Ui) {
@@ -701,17 +726,46 @@ impl RepoTab {
         egui::CentralPanel::default()
             .frame(egui::Frame::new())
             .show_inside(ui, |ui| {
+                let searching = !self.search.trim().is_empty();
                 let changes = self
                     .status
                     .as_ref()
-                    .filter(|s| !s.is_clean())
+                    .filter(|s| !s.is_clean() && !searching)
                     .map(|s| s.change_count());
-                if self.commits.is_empty() && changes.is_none() && !self.log_loading {
+                if self.commits.is_empty() && changes.is_none() && !self.log_loading && !searching {
                     ui.weak("Este repositorio todavía no tiene commits.");
                 }
-                let resp =
-                    self.list
-                        .show(ui, &self.commits, &self.graph, self.selected, changes, None);
+                let log_complete = self.log_complete;
+                let loaded = self.commits.len();
+                let visible = self.search_results().map(<[usize]>::to_vec);
+                if let Some(found) = &visible {
+                    egui::Frame::new()
+                        .inner_margin(egui::Margin::symmetric(20, 6))
+                        .show(ui, |ui| {
+                            let mut text = match found.len() {
+                                1 => "1 commit encontrado".to_owned(),
+                                n => format!("{n} commits encontrados"),
+                            };
+                            if !log_complete {
+                                text.push_str(&format!(
+                                    " (buscando en el historial, {loaded} revisados…)"
+                                ));
+                            }
+                            ui.label(
+                                egui::RichText::new(text)
+                                    .size(12.0)
+                                    .color(theme::TEXT_MUTED),
+                            );
+                        });
+                }
+                let resp = self.list.show(
+                    ui,
+                    &self.commits,
+                    &self.graph,
+                    self.selected,
+                    changes,
+                    visible.as_deref(),
+                );
                 if let Some(row) = resp.selected {
                     actions.push(Action::Select(row));
                 }
@@ -907,4 +961,85 @@ fn upstream_chip(ui: &mut egui::Ui, upstream: &str, ahead: u32, behind: u32) {
                 );
             });
         });
+}
+
+/// Commits cuyo mensaje, autor, correo o hash contienen `query` (en minúsculas).
+fn search_commits(commits: &[Commit], query: &str) -> Vec<usize> {
+    commits
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| {
+            c.id.starts_with(query)
+                || c.summary.to_lowercase().contains(query)
+                || c.author_name.to_lowercase().contains(query)
+                || c.author_email.to_lowercase().contains(query)
+        })
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// Campo de búsqueda de commits. Ctrl+F lo enfoca y Escape lo vacía.
+fn search_box(ui: &mut egui::Ui, text: &mut String) {
+    let id = egui::Id::new("commit_search");
+    if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::F)) {
+        ui.memory_mut(|m| m.request_focus(id));
+    }
+    egui::Frame::new()
+        .fill(theme::BG_INPUT)
+        .stroke(egui::Stroke::new(1.0, theme::BORDER_STRONG))
+        .corner_radius(8)
+        .inner_margin(egui::Margin::symmetric(12, 0))
+        .show(ui, |ui| {
+            ui.set_width(236.0);
+            ui.set_height(32.0);
+            // El padre es de derecha a izquierda: aquí se fuerza el orden normal.
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                icons::show(ui, Icon::Search, 14.0, theme::TEXT_MUTED);
+                let edit = ui.add(
+                    egui::TextEdit::singleline(text)
+                        .id(id)
+                        .frame(false)
+                        .hint_text("Buscar commit, autor o hash…")
+                        .desired_width(f32::INFINITY),
+                );
+                if edit.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    text.clear();
+                    edit.surrender_focus();
+                }
+                edit.on_hover_text("Buscar en mensajes, autores y hashes (Ctrl+F)");
+            });
+        });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn commit(id: &str, summary: &str, author: &str) -> Commit {
+        Commit {
+            id: id.into(),
+            short_id: id[..7].into(),
+            parents: Vec::new(),
+            author_name: author.into(),
+            author_email: format!("{}@example.com", author.to_lowercase()),
+            time: 0,
+            refs: Vec::new(),
+            summary: summary.into(),
+        }
+    }
+
+    #[test]
+    fn searches_message_author_email_and_hash() {
+        let commits = [
+            commit("abc1234def", "feat: Add login", "Ana"),
+            commit("bcd2345efa", "fix: typo", "Luis"),
+            commit("cde3456fab", "docs: readme", "Ana Pérez"),
+        ];
+        assert_eq!(search_commits(&commits, "login"), [0]);
+        assert_eq!(search_commits(&commits, "ana"), [0, 2]);
+        assert_eq!(search_commits(&commits, "luis@"), [1]);
+        assert_eq!(search_commits(&commits, "cde34"), [2]);
+        // El hash solo coincide por el principio.
+        assert!(search_commits(&commits, "def").is_empty());
+    }
 }
