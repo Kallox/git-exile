@@ -1,0 +1,13 @@
+//! Componentes de la interfaz.
+
+pub mod commit_list;
+
+use chrono::{Local, TimeZone};
+
+/// Formatea segundos desde epoch en la zona horaria local.
+pub fn format_time(secs: i64) -> String {
+    match Local.timestamp_opt(secs, 0).single() {
+        Some(t) => t.format("%Y-%m-%d %H:%M").to_string(),
+        None => secs.to_string(),
+    }
+}

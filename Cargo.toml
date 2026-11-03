@@ -5,6 +5,7 @@ edition = "2024"
 rust-version = "1.89"
 
 [dependencies]
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 eframe = { version = "0.33", features = ["persistence"] }
 rfd = "0.17.2"
 thiserror = "2.0.21"

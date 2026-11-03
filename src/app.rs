@@ -1,8 +1,9 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use eframe::egui;
 
 use crate::git::{self, Commit, Repo};
+use crate::ui::commit_list::CommitList;
 use crate::worker::Worker;
 
 const RECENT_KEY: &str = "recent_repositories";
@@ -30,6 +31,8 @@ struct RepoState {
     commits: Vec<Commit>,
     log_complete: bool,
     log_loading: bool,
+    selected: Option<usize>,
+    list: CommitList,
 }
 
 pub struct GitExileApp {
@@ -110,6 +113,8 @@ impl GitExileApp {
                         commits: Vec::new(),
                         log_complete: false,
                         log_loading: false,
+                        selected: None,
+                        list: CommitList::default(),
                     });
                     self.error = None;
                     self.load_log_page();
@@ -150,7 +155,7 @@ impl GitExileApp {
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            if ui.button("📂 Abrir…").clicked() {
+            if ui.button("Abrir…").clicked() {
                 self.pick_folder();
             }
 
@@ -174,7 +179,7 @@ impl GitExileApp {
                 ui.separator();
                 ui.strong(state.repo.name());
                 ui.label(match &state.branch {
-                    Some(b) => format!("⎇ {b}"),
+                    Some(b) => format!("rama: {b}"),
                     None => "HEAD separado".to_owned(),
                 })
                 .on_hover_text(state.repo.root().display().to_string());
@@ -211,7 +216,8 @@ impl eframe::App for GitExileApp {
             self.error_bar(ui);
         });
 
-        egui::CentralPanel::default().show(ctx, |ui| match &self.repo {
+        let mut wants_more = false;
+        egui::CentralPanel::default().show(ctx, |ui| match &mut self.repo {
             None => {
                 ui.centered_and_justified(|ui| {
                     if ui.button("Abrir un repositorio git…").clicked() {
@@ -220,9 +226,19 @@ impl eframe::App for GitExileApp {
                 });
             }
             Some(state) => {
-                ui.label(format!("{} commits cargados", state.commits.len()));
+                if state.commits.is_empty() && !state.log_loading {
+                    ui.weak("Este repositorio todavía no tiene commits.");
+                }
+                let resp = state.list.show(ui, &state.commits, state.selected);
+                if let Some(i) = resp.selected {
+                    state.selected = Some(i);
+                }
+                wants_more = resp.wants_more;
             }
         });
+        if wants_more {
+            self.load_log_page();
+        }
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
