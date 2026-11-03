@@ -714,6 +714,7 @@ impl RepoTab {
         }
         if self.selected.is_some() {
             egui::TopBottomPanel::bottom("details_panel")
+                .frame(egui::Frame::new())
                 .resizable(true)
                 .default_height(ui.available_height() * 0.55)
                 .min_height(120.0)
@@ -795,8 +796,9 @@ impl RepoTab {
         };
         egui::SidePanel::left("commit_info")
             .resizable(true)
-            .default_width(ui.available_width() * 0.4)
-            .min_width(200.0)
+            .default_width(ui.available_width() * 0.45)
+            .min_width(280.0)
+            .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(24, 20)))
             .show_inside(ui, |ui| {
                 if let Some(DetailsAction::SelectCommit(id)) =
                     commit_details::show(ui, details, &mut self.selected_file)

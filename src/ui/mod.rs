@@ -20,3 +20,22 @@ pub fn format_time(secs: i64) -> String {
         None => secs.to_string(),
     }
 }
+
+/// Fecha larga en español, p. ej. `3 nov 2026, 14:49`.
+pub fn format_date_long(secs: i64) -> String {
+    use chrono::{Datelike, Timelike};
+    const MONTHS: [&str; 12] = [
+        "ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sept", "oct", "nov", "dic",
+    ];
+    match Local.timestamp_opt(secs, 0).single() {
+        Some(t) => format!(
+            "{} {} {}, {:02}:{:02}",
+            t.day(),
+            MONTHS[t.month0() as usize],
+            t.year(),
+            t.hour(),
+            t.minute()
+        ),
+        None => secs.to_string(),
+    }
+}

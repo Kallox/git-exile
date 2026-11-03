@@ -2,7 +2,7 @@
 
 use eframe::egui::{Align, Color32, Layout, RichText, ScrollArea, Ui};
 
-use super::commit_details::{ADDED, REMOVED};
+use super::theme::{GREEN as ADDED, RED as REMOVED};
 use crate::git::{ChangeKind, StatusEntry, WorkingTreeStatus};
 
 /// Archivo seleccionado en la vista de cambios.
