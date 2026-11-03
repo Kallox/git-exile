@@ -5,7 +5,7 @@
 //! está el nodo) y del centro al borde inferior. Los carriles no se compactan,
 //! así una rama mantiene su columna mientras está activa.
 
-use super::log::Commit;
+use super::log::{Commit, RefKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Half {
@@ -31,6 +31,11 @@ pub struct GraphRow {
     pub segments: Vec<Segment>,
     /// Número de carriles que ocupa la fila.
     pub width: usize,
+    /// Rama a la que pertenece el commit: la suya si es la punta de una rama,
+    /// o la heredada del carril por el que llega.
+    pub branch: Option<String>,
+    /// El commit es la punta (el más reciente) de `branch`.
+    pub tip: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -38,6 +43,8 @@ struct Lane {
     /// Commit que se espera encontrar más abajo en este carril.
     expects: String,
     color: usize,
+    /// Rama que recorre este carril, si se conoce.
+    branch: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -103,6 +110,15 @@ impl Graph {
             }
         };
 
+        // Rama: la propia si el commit es una punta; si no, la del carril.
+        let own = tip_branch(commit);
+        let inherited = waiting
+            .iter()
+            .find_map(|&i| self.lanes[i].as_ref().and_then(|l| l.branch.clone()));
+        let tip = own.is_some();
+        let branch = own.clone().or_else(|| inherited.clone());
+        let lane_branch = inherited.or(own);
+
         // Mitad superior: las ramas que esperaban este commit convergen en él;
         // el resto sigue recto.
         for (i, slot) in self.lanes.iter().enumerate() {
@@ -130,22 +146,33 @@ impl Graph {
             self.lanes[lane] = Some(Lane {
                 expects: first.clone(),
                 color,
+                branch: lane_branch,
             });
             parent_targets.push((lane, color));
         }
-        for parent in commit.parents.iter().skip(1) {
+        // El segundo padre de un merge suele ser la rama nombrada en el mensaje.
+        let merged = merged_branch(&commit.summary);
+        for (n, parent) in commit.parents.iter().enumerate().skip(1) {
+            let name = if n == 1 { merged.clone() } else { None };
             let existing = self
                 .lanes
                 .iter()
                 .position(|l| l.as_ref().is_some_and(|l| &l.expects == parent));
             let target = match existing {
-                Some(i) => (i, self.lanes[i].as_ref().unwrap().color),
+                Some(i) => {
+                    let l = self.lanes[i].as_mut().unwrap();
+                    if l.branch.is_none() {
+                        l.branch = name;
+                    }
+                    (i, l.color)
+                }
                 None => {
                     let i = self.free_slot(lane);
                     let c = self.new_color();
                     self.lanes[i] = Some(Lane {
                         expects: parent.clone(),
                         color: c,
+                        branch: name,
                     });
                     (i, c)
                 }
@@ -193,8 +220,52 @@ impl Graph {
             color,
             segments,
             width,
+            branch,
+            tip,
         }
     }
+}
+
+/// Rama de la que `commit` es la punta: la actual, luego una local y por
+/// último una remota.
+fn tip_branch(commit: &Commit) -> Option<String> {
+    commit
+        .refs
+        .iter()
+        .filter_map(|r| {
+            let rank = match r.kind {
+                RefKind::Branch { current: true } => 0,
+                RefKind::Branch { current: false } => 1,
+                RefKind::Remote if !r.name.ends_with("/HEAD") => 2,
+                _ => return None,
+            };
+            Some((rank, &r.name))
+        })
+        .min_by_key(|&(rank, _)| rank)
+        .map(|(_, name)| name.clone())
+}
+
+/// Rama fusionada según el mensaje por defecto de `git merge` o de un pull
+/// request: `Merge branch 'x'`, `Merge remote-tracking branch 'origin/x'`,
+/// `Merge pull request #1 from user/x`.
+fn merged_branch(summary: &str) -> Option<String> {
+    let quoted = |rest: &str| {
+        rest.strip_prefix('\'')?
+            .split('\'')
+            .next()
+            .map(str::to_owned)
+    };
+    if let Some(rest) = summary.strip_prefix("Merge branch ") {
+        quoted(rest)
+    } else if let Some(rest) = summary.strip_prefix("Merge remote-tracking branch ") {
+        quoted(rest)
+    } else if let Some(rest) = summary.strip_prefix("Merge pull request ") {
+        let from = rest.split_once(" from ")?.1.split_whitespace().next()?;
+        Some(from.split_once('/').map_or(from, |(_, b)| b).to_owned())
+    } else {
+        None
+    }
+    .filter(|b| !b.is_empty())
 }
 
 #[cfg(test)]
@@ -265,6 +336,85 @@ mod tests {
         assert!(has(&g.rows[2], Half::Top, 0, 0) && has(&g.rows[2], Half::Top, 1, 0));
         // Al terminar no queda ningún carril abierto.
         assert!(g.lanes.is_empty());
+    }
+
+    fn with_ref(mut c: Commit, name: &str, kind: RefKind) -> Commit {
+        c.refs.push(crate::git::RefLabel {
+            name: name.into(),
+            kind,
+        });
+        c
+    }
+
+    fn branches(g: &Graph) -> Vec<(Option<&str>, bool)> {
+        g.rows
+            .iter()
+            .map(|r| (r.branch.as_deref(), r.tip))
+            .collect()
+    }
+
+    #[test]
+    fn branch_names_follow_lanes() {
+        // x (feature) y m (main) salen de a; main es la actual.
+        let g = Graph::new(&[
+            with_ref(
+                commit("x", &["b"]),
+                "feature",
+                RefKind::Branch { current: false },
+            ),
+            commit("b", &["a"]),
+            with_ref(
+                with_ref(commit("m", &["a"]), "origin/main", RefKind::Remote),
+                "main",
+                RefKind::Branch { current: true },
+            ),
+            commit("a", &[]),
+        ]);
+        assert_eq!(
+            branches(&g),
+            [
+                (Some("feature"), true),
+                (Some("feature"), false),
+                (Some("main"), true),
+                // Donde convergen gana el carril del nodo (el primero).
+                (Some("feature"), false),
+            ]
+        );
+    }
+
+    #[test]
+    fn merged_branch_is_named_from_the_message() {
+        let mut m = commit("m", &["c", "b"]);
+        m.summary = "Merge branch 'feature' into main".into();
+        let g = Graph::new(&[
+            with_ref(m, "main", RefKind::Branch { current: true }),
+            commit("c", &["a"]),
+            commit("b", &["a"]),
+            commit("a", &[]),
+        ]);
+        assert_eq!(
+            branches(&g),
+            [
+                (Some("main"), true),
+                (Some("main"), false),
+                (Some("feature"), false),
+                (Some("main"), false),
+            ]
+        );
+    }
+
+    #[test]
+    fn merge_messages() {
+        assert_eq!(merged_branch("Merge branch 'dev'").as_deref(), Some("dev"));
+        assert_eq!(
+            merged_branch("Merge remote-tracking branch 'origin/dev'").as_deref(),
+            Some("origin/dev")
+        );
+        assert_eq!(
+            merged_branch("Merge pull request #3 from luis/fix-ui").as_deref(),
+            Some("fix-ui")
+        );
+        assert_eq!(merged_branch("feat: merge things"), None);
     }
 
     #[test]

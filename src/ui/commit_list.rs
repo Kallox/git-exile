@@ -3,7 +3,7 @@ use eframe::egui::{self, Align2, Color32, Key, Rect, ScrollArea, Sense, Stroke, 
 use super::graph_view;
 use super::icons::{self, Icon};
 use super::theme;
-use crate::git::{Commit, Graph, RefKind, RefLabel};
+use crate::git::{Commit, Graph, GraphRow, RefKind, RefLabel};
 
 pub const ROW_HEIGHT: f32 = 34.0;
 const HEADER_HEIGHT: f32 = 32.0;
@@ -13,6 +13,10 @@ const AUTHOR_WIDTH: f32 = 190.0;
 const RIGHT_PADDING: f32 = 20.0;
 const MIN_GRAPH_WIDTH: f32 = 76.0;
 const GAP: f32 = 6.0;
+/// Columna con la rama de cada commit, a la izquierda del grafo.
+const BRANCH_WIDTH: f32 = 150.0;
+/// Opacidad de la rama de un commit que no es la punta (solo al pasar el ratón).
+const INHERITED_OPACITY: f32 = 0.4;
 /// Cuántas filas antes del final se pide la siguiente página.
 const PREFETCH_ROWS: usize = 100;
 
@@ -89,6 +93,7 @@ impl Layout<'_> {
 
 /// Posiciones de las columnas en una fila.
 struct Columns {
+    branch: f32,
     graph: f32,
     desc: f32,
     author: f32,
@@ -102,8 +107,9 @@ impl Columns {
         let date = hash - DATE_WIDTH;
         let author = date - AUTHOR_WIDTH;
         Self {
-            graph: rect.left(),
-            desc: rect.left() + graph_width,
+            branch: rect.left(),
+            graph: rect.left() + BRANCH_WIDTH,
+            desc: rect.left() + BRANCH_WIDTH + graph_width,
             author,
             date,
             hash,
@@ -189,6 +195,11 @@ impl CommitList {
                         resp.hovered(),
                     ),
                 }
+                if let ListRow::Commit(i) = row
+                    && let Some(graph_row) = graph.rows.get(i)
+                {
+                    paint_branch_cell(ui, rect, graph_row, graph_width, resp.hovered());
+                }
                 if resp.clicked() {
                     response.selected = Some(row);
                 }
@@ -271,6 +282,7 @@ fn header(ui: &mut Ui, graph_width: f32, show_graph: bool) {
             theme::TEXT_MUTED,
         );
     };
+    text(cols.branch + 16.0, "RAMA");
     if show_graph {
         text(cols.graph + 20.0, "GRAFO");
     }
@@ -304,7 +316,11 @@ fn paint_worktree_row(
 ) {
     let bg = row_background(ui, rect, selected, hovered);
     let painter = ui.painter_at(rect);
-    let graph_rect = Rect::from_min_size(rect.min, vec2(graph_width, rect.height()));
+    let cols = Columns::new(rect, graph_width);
+    let graph_rect = Rect::from_min_size(
+        pos2(cols.graph, rect.top()),
+        vec2(graph_width, rect.height()),
+    );
     graph_view::paint_worktree_node(&painter, graph_rect, bg);
 
     let color = if selected {
@@ -317,7 +333,7 @@ fn paint_worktree_row(
         n => format!("Cambios sin commitear ({n} archivos)"),
     };
     painter.text(
-        pos2(rect.left() + graph_width, rect.center().y),
+        pos2(cols.desc, rect.center().y),
         Align2::LEFT_CENTER,
         text,
         theme::font(13.0),
@@ -329,7 +345,7 @@ fn paint_row(
     ui: &Ui,
     rect: Rect,
     commit: &Commit,
-    graph_row: Option<&crate::git::GraphRow>,
+    graph_row: Option<&GraphRow>,
     graph_width: f32,
     selected: bool,
     hovered: bool,
@@ -344,7 +360,10 @@ fn paint_row(
             .refs
             .iter()
             .any(|r| matches!(r.kind, RefKind::Head | RefKind::Branch { current: true }));
-        let graph_rect = Rect::from_min_size(rect.min, vec2(graph_width, rect.height()));
+        let graph_rect = Rect::from_min_size(
+            pos2(cols.graph, rect.top()),
+            vec2(graph_width, rect.height()),
+        );
         graph_view::paint_row(&painter, graph_rect, row, is_head, selected, bg);
     }
 
@@ -407,6 +426,74 @@ fn paint_row(
         } else {
             theme::TEXT
         },
+    );
+}
+
+/// Columna de rama: la punta de cada rama siempre; el resto solo al pasar el
+/// ratón y más transparente.
+fn paint_branch_cell(ui: &Ui, rect: Rect, row: &GraphRow, graph_width: f32, hovered: bool) {
+    let Some(name) = &row.branch else { return };
+    if !(row.tip || hovered) {
+        return;
+    }
+    let cols = Columns::new(rect, graph_width);
+    let opacity = if row.tip { 1.0 } else { INHERITED_OPACITY };
+    let clip = Rect::from_x_y_ranges(cols.branch..=cols.graph - GAP, rect.y_range());
+    paint_branch(
+        &ui.painter_at(clip),
+        name,
+        graph_view::color(row.color),
+        cols.branch + 10.0,
+        cols.graph - GAP,
+        rect.center().y,
+        opacity,
+    );
+}
+
+/// Etiqueta con el nombre de la rama en el color de su carril, recortada con
+/// "…" si no cabe entre `x` y `max_x`.
+fn paint_branch(
+    painter: &egui::Painter,
+    name: &str,
+    color: Color32,
+    x: f32,
+    max_x: f32,
+    y: f32,
+    opacity: f32,
+) {
+    const PAD: f32 = 7.0;
+    const ICON: f32 = 10.0 + 4.0;
+    let text_color = color.gamma_multiply(opacity);
+    let max_text = (max_x - x - PAD * 2.0 - ICON).max(0.0);
+    let mut text = name.to_owned();
+    let mut galley = painter.layout_no_wrap(text.clone(), theme::font_semibold(11.0), text_color);
+    while galley.size().x > max_text && text.chars().count() > 1 {
+        text.pop();
+        let shown = format!("{}…", text.trim_end());
+        galley = painter.layout_no_wrap(shown, theme::font_semibold(11.0), text_color);
+    }
+    let rect = Rect::from_min_size(
+        pos2(x, y - 10.0),
+        vec2(PAD + ICON + galley.size().x + PAD, 20.0),
+    );
+    painter.rect(
+        rect,
+        5.0,
+        theme::alpha(color, 0.14 * opacity),
+        Stroke::new(1.0, theme::alpha(color, 0.4 * opacity)),
+        egui::StrokeKind::Inside,
+    );
+    icons::paint(
+        painter,
+        Rect::from_center_size(pos2(rect.left() + PAD + 5.0, y), vec2(10.0, 10.0)),
+        Icon::BranchSmall,
+        text_color,
+        2.4,
+    );
+    painter.galley(
+        pos2(rect.left() + PAD + ICON, y - galley.size().y / 2.0),
+        galley,
+        text_color,
     );
 }
 

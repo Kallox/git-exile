@@ -10,6 +10,8 @@ credential helpers, etc.).
 ## Funcionalidades
 
 - Historial de todas las ramas, remotos y tags con grafo de ramas y merges.
+- Columna con la rama de cada commit: la punta de cada rama siempre visible y, al pasar el ratón, la rama
+  de los commits anteriores (más transparente). Se deduce siguiendo el primer padre y los mensajes de merge.
 - Etiquetas de ramas, ramas remotas, tags y HEAD en cada commit.
 - Carga paginada del historial, pensada para repositorios grandes.
 - Detalles del commit: autor, committer, mensaje completo, padres y archivos cambiados.
