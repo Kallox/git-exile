@@ -1,4 +1,5 @@
 mod app;
+mod browser;
 mod git;
 mod repo_tab;
 mod ui;

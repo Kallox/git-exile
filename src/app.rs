@@ -2,8 +2,10 @@ use std::path::{Path, PathBuf};
 
 use eframe::egui::{self, Key, Modifiers};
 
+use crate::browser;
 use crate::git::{self, Repo};
 use crate::repo_tab::{Jobs, RepoMessage, RepoTab};
+use crate::ui::repo_browser::{BrowserAction, RepoBrowser};
 use crate::worker::Worker;
 
 const RECENT_KEY: &str = "recent_repositories";
@@ -24,6 +26,8 @@ pub enum MessageKind {
 }
 
 enum TabContent {
+    /// Buscador de repositorios.
+    Browser(Box<RepoBrowser>),
     /// Abriendo el repositorio de esta ruta.
     Loading(PathBuf),
     Repo(Box<RepoTab>),
@@ -37,6 +41,7 @@ struct Tab {
 impl Tab {
     fn title(&self) -> String {
         match &self.content {
+            TabContent::Browser(_) => "Abrir repositorio".to_owned(),
             TabContent::Loading(path) => path
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
@@ -47,6 +52,7 @@ impl Tab {
 
     fn path(&self) -> &Path {
         match &self.content {
+            TabContent::Browser(b) => b.current(),
             TabContent::Loading(path) => path,
             TabContent::Repo(repo) => repo.repo.root(),
         }
@@ -108,26 +114,71 @@ impl GitExileApp {
         }
     }
 
+    fn new_id(&mut self) -> u64 {
+        self.next_id += 1;
+        self.next_id
+    }
+
+    fn repo_tab_index(&self, path: &Path) -> Option<usize> {
+        self.tabs
+            .iter()
+            .position(|t| !matches!(t.content, TabContent::Browser(_)) && same_path(t.path(), path))
+    }
+
     /// Abre `path` en una pestaña nueva, o activa la que ya lo tenga abierto.
     fn open(&mut self, path: PathBuf) {
-        if let Some(i) = self.tabs.iter().position(|t| same_path(t.path(), &path)) {
+        if let Some(i) = self.repo_tab_index(&path) {
             self.activate(i);
             return;
         }
-        let id = self.next_id;
-        self.next_id += 1;
+        let id = self.new_id();
         self.tabs.push(Tab {
             id,
             content: TabContent::Loading(path.clone()),
         });
         self.active = self.tabs.len() - 1;
+        self.spawn_open(id, path);
+    }
+
+    /// Abre `path` reemplazando la pestaña `index` (el buscador desde el que se abrió).
+    fn open_in(&mut self, index: usize, path: PathBuf) {
+        if let Some(existing) = self.repo_tab_index(&path) {
+            self.close(index);
+            let existing = self.repo_tab_index(&path).unwrap_or(existing);
+            self.activate(existing);
+            self.active = existing;
+            return;
+        }
+        let id = self.tabs[index].id;
+        self.tabs[index].content = TabContent::Loading(path.clone());
+        self.spawn_open(id, path);
+    }
+
+    fn spawn_open(&mut self, tab: u64, path: PathBuf) {
         self.worker.spawn(move || Message {
-            tab: id,
+            tab,
             kind: MessageKind::Opened(Repo::open(&path).and_then(|repo| {
                 let branch = repo.current_branch()?;
                 Ok((repo, branch))
             })),
         });
+    }
+
+    /// Abre una pestaña con el buscador de repositorios.
+    fn new_browser_tab(&mut self) {
+        // Empezar junto al repositorio activo, o en la carpeta personal.
+        let start = self
+            .tabs
+            .get(self.active)
+            .filter(|t| matches!(t.content, TabContent::Repo(_)))
+            .and_then(|t| t.path().parent().map(Path::to_path_buf))
+            .unwrap_or_else(browser::home_dir);
+        let id = self.new_id();
+        self.tabs.push(Tab {
+            id,
+            content: TabContent::Browser(Box::new(RepoBrowser::new(start))),
+        });
+        self.active = self.tabs.len() - 1;
     }
 
     fn activate(&mut self, index: usize) {
@@ -197,9 +248,16 @@ impl GitExileApp {
                     self.tabs[index].content = TabContent::Repo(Box::new(repo));
                 }
                 MessageKind::Opened(Err(e)) => {
-                    let path = self.tabs[index].path().display().to_string();
-                    self.error = Some(format!("No se pudo abrir {path}: {e}"));
-                    self.close(index);
+                    let path = self.tabs[index].path().to_path_buf();
+                    self.error = Some(format!("No se pudo abrir {}: {e}", path.display()));
+                    // Volver al buscador en esa carpeta para poder elegir otra.
+                    let start = if path.is_dir() {
+                        path
+                    } else {
+                        browser::home_dir()
+                    };
+                    self.tabs[index].content =
+                        TabContent::Browser(Box::new(RepoBrowser::new(start)));
                 }
                 MessageKind::Repo(repo_msg) => {
                     let tab = &mut self.tabs[index];
@@ -215,17 +273,10 @@ impl GitExileApp {
         }
     }
 
-    fn pick_folder(&mut self) {
-        let mut dialog = rfd::FileDialog::new().set_title("Abrir repositorio");
-        if let Some(tab) = self.tabs.get(self.active) {
-            dialog = dialog.set_directory(tab.path());
-        }
-        if let Some(path) = dialog.pick_folder() {
-            self.open(path);
-        }
-    }
-
     fn keyboard(&mut self, ctx: &egui::Context) {
+        if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::T)) {
+            self.new_browser_tab();
+        }
         let (close, next, prev) = ctx.input_mut(|i| {
             (
                 i.consume_key(Modifiers::COMMAND, Key::W),
@@ -250,7 +301,7 @@ impl GitExileApp {
         let mut activate = None;
         let mut close = None;
         let mut open = None;
-        let mut pick = false;
+        let mut new_tab = false;
 
         ui.horizontal(|ui| {
             egui::ScrollArea::horizontal()
@@ -295,10 +346,10 @@ impl GitExileApp {
                         }
                         if ui
                             .button("+")
-                            .on_hover_text("Abrir otro repositorio")
+                            .on_hover_text("Abrir otro repositorio (Ctrl+T)")
                             .clicked()
                         {
-                            pick = true;
+                            new_tab = true;
                         }
                     });
                 });
@@ -329,8 +380,8 @@ impl GitExileApp {
         if let Some(path) = open {
             self.open(path);
         }
-        if pick {
-            self.pick_folder();
+        if new_tab {
+            self.new_browser_tab();
         }
     }
 
@@ -344,32 +395,6 @@ impl GitExileApp {
         }
         if close {
             self.error = None;
-        }
-    }
-
-    fn empty_view(&mut self, ui: &mut egui::Ui) {
-        let mut pick = false;
-        let mut open = None;
-        ui.vertical_centered(|ui| {
-            ui.add_space(ui.available_height() * 0.3);
-            ui.heading("git-exile");
-            ui.add_space(12.0);
-            pick = ui.button("Abrir un repositorio…").clicked();
-            if !self.recent.is_empty() {
-                ui.add_space(16.0);
-                ui.weak("Recientes");
-                for path in &self.recent {
-                    if ui.link(path.display().to_string()).clicked() {
-                        open = Some(path.clone());
-                    }
-                }
-            }
-        });
-        if pick {
-            self.pick_folder();
-        }
-        if let Some(path) = open {
-            self.open(path);
         }
     }
 }
@@ -386,6 +411,10 @@ impl eframe::App for GitExileApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.handle_messages();
         self.keyboard(ctx);
+        // Sin pestañas se muestra el buscador.
+        if self.tabs.is_empty() {
+            self.new_browser_tab();
+        }
 
         // Refrescar con F5 o al volver a la ventana (puede haber cambios hechos fuera).
         let focused = ctx.input(|i| i.focused);
@@ -400,14 +429,24 @@ impl eframe::App for GitExileApp {
             self.error_bar(ui);
         });
 
+        let mut browser_action = None;
+        let recent = &self.recent;
+        let open: Vec<PathBuf> = self
+            .tabs
+            .iter()
+            .filter(|t| matches!(t.content, TabContent::Repo(_)))
+            .map(|t| t.path().to_path_buf())
+            .collect();
         egui::CentralPanel::default()
             .frame(egui::Frame::central_panel(&ctx.style()).inner_margin(0.0))
             .show(ctx, |ui| {
                 let Some(tab) = self.tabs.get_mut(self.active) else {
-                    self.empty_view(ui);
                     return;
                 };
                 match &mut tab.content {
+                    TabContent::Browser(b) => {
+                        browser_action = ui.push_id(tab.id, |ui| b.show(ui, recent, &open)).inner;
+                    }
                     TabContent::Loading(path) => {
                         ui.centered_and_justified(|ui| {
                             ui.label(format!("Abriendo {}…", path.display()));
@@ -423,12 +462,27 @@ impl eframe::App for GitExileApp {
                     }
                 }
             });
+        if let Some(BrowserAction::Open(path)) = browser_action {
+            self.open_in(self.active, path);
+        }
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        let open: Vec<PathBuf> = self.tabs.iter().map(|t| t.path().to_path_buf()).collect();
+        // Los buscadores no se guardan: solo los repositorios.
+        let repos: Vec<(usize, PathBuf)> = self
+            .tabs
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| !matches!(t.content, TabContent::Browser(_)))
+            .map(|(i, t)| (i, t.path().to_path_buf()))
+            .collect();
+        let active = repos
+            .iter()
+            .position(|(i, _)| *i == self.active)
+            .unwrap_or(0);
+        let open: Vec<PathBuf> = repos.into_iter().map(|(_, p)| p).collect();
         eframe::set_value(storage, RECENT_KEY, &self.recent);
         eframe::set_value(storage, OPEN_TABS_KEY, &open);
-        eframe::set_value(storage, ACTIVE_TAB_KEY, &self.active);
+        eframe::set_value(storage, ACTIVE_TAB_KEY, &active);
     }
 }
