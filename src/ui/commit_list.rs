@@ -31,6 +31,11 @@ pub struct ListResponse {
 }
 
 impl CommitList {
+    /// Hace visible la fila `row` en el próximo frame.
+    pub fn scroll_to(&mut self, row: usize) {
+        self.scroll_to = Some(row);
+    }
+
     /// Dibuja la lista. `selected` es la fila seleccionada actualmente.
     pub fn show(
         &mut self,

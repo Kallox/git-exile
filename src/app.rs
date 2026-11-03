@@ -2,7 +2,8 @@ use std::path::PathBuf;
 
 use eframe::egui;
 
-use crate::git::{self, Commit, Graph, Repo};
+use crate::git::{self, Commit, CommitDetails, Graph, Repo};
+use crate::ui::commit_details::{self, DetailsAction};
 use crate::ui::commit_list::CommitList;
 use crate::worker::Worker;
 
@@ -23,6 +24,17 @@ enum MessageKind {
         skip: usize,
         result: git::Result<Vec<Commit>>,
     },
+    Details {
+        id: String,
+        result: git::Result<CommitDetails>,
+    },
+}
+
+/// Lo que la interfaz pide hacer al terminar el frame.
+enum Action {
+    LoadMore,
+    Select(usize),
+    SelectId(String),
 }
 
 struct RepoState {
@@ -34,6 +46,32 @@ struct RepoState {
     log_loading: bool,
     selected: Option<usize>,
     list: CommitList,
+    details: Option<CommitDetails>,
+    /// Commit cuyos detalles se están cargando.
+    details_loading: Option<String>,
+    selected_file: Option<usize>,
+}
+
+impl RepoState {
+    fn new(repo: Repo, branch: Option<String>) -> Self {
+        Self {
+            repo,
+            branch,
+            commits: Vec::new(),
+            graph: Graph::default(),
+            log_complete: false,
+            log_loading: false,
+            selected: None,
+            list: CommitList::default(),
+            details: None,
+            details_loading: None,
+            selected_file: None,
+        }
+    }
+
+    fn selected_commit(&self) -> Option<&Commit> {
+        self.selected.and_then(|i| self.commits.get(i))
+    }
 }
 
 pub struct GitExileApp {
@@ -97,7 +135,45 @@ impl GitExileApp {
         });
     }
 
+    fn select(&mut self, index: usize) {
+        let Some(state) = &mut self.repo else { return };
+        if state.selected == Some(index) {
+            return;
+        }
+        let Some(commit) = state.commits.get(index) else {
+            return;
+        };
+        state.selected = Some(index);
+        let id = commit.id.clone();
+        let repo = state.repo.clone();
+        state.details_loading = Some(id.clone());
+        self.spawn(move || MessageKind::Details {
+            result: git::load_commit(&repo, &id),
+            id,
+        });
+    }
+
+    fn apply(&mut self, action: Action) {
+        match action {
+            Action::LoadMore => self.load_log_page(),
+            Action::Select(i) => self.select(i),
+            Action::SelectId(id) => {
+                let index = self
+                    .repo
+                    .as_ref()
+                    .and_then(|s| s.commits.iter().position(|c| c.id == id));
+                if let Some(i) = index {
+                    if let Some(state) = &mut self.repo {
+                        state.list.scroll_to(i);
+                    }
+                    self.select(i);
+                }
+            }
+        }
+    }
+
     fn handle_messages(&mut self) {
+        let mut select_first = false;
         for msg in self.worker.poll() {
             if msg.epoch != self.epoch {
                 continue;
@@ -108,16 +184,7 @@ impl GitExileApp {
                     self.recent.retain(|p| p != &root);
                     self.recent.insert(0, root);
                     self.recent.truncate(MAX_RECENT);
-                    self.repo = Some(RepoState {
-                        repo,
-                        branch,
-                        commits: Vec::new(),
-                        graph: Graph::default(),
-                        log_complete: false,
-                        log_loading: false,
-                        selected: None,
-                        list: CommitList::default(),
-                    });
+                    self.repo = Some(RepoState::new(repo, branch));
                     self.error = None;
                     self.load_log_page();
                 }
@@ -132,6 +199,7 @@ impl GitExileApp {
                     match result {
                         Ok(page) if skip == state.commits.len() => {
                             state.log_complete = page.len() < LOG_PAGE;
+                            select_first = skip == 0 && !page.is_empty();
                             state.graph.extend(&page);
                             state.commits.extend(page);
                         }
@@ -142,7 +210,29 @@ impl GitExileApp {
                         }
                     }
                 }
+                MessageKind::Details { id, result } => {
+                    let Some(state) = &mut self.repo else {
+                        continue;
+                    };
+                    if state.details_loading.as_ref() != Some(&id) {
+                        continue;
+                    }
+                    state.details_loading = None;
+                    match result {
+                        Ok(details) => {
+                            state.selected_file = (!details.files.is_empty()).then_some(0);
+                            state.details = Some(details);
+                        }
+                        Err(e) => {
+                            state.details = None;
+                            self.error = Some(format!("Error leyendo el commit: {e}"));
+                        }
+                    }
+                }
             }
+        }
+        if select_first {
+            self.select(0);
         }
     }
 
@@ -210,6 +300,49 @@ impl GitExileApp {
     }
 }
 
+fn details_panel(ui: &mut egui::Ui, state: &mut RepoState, actions: &mut Vec<Action>) {
+    let Some(details) = &state.details else {
+        ui.centered_and_justified(|ui| {
+            if state.details_loading.is_some() {
+                ui.spinner();
+            } else {
+                ui.weak("Selecciona un commit para ver sus cambios.");
+            }
+        });
+        return;
+    };
+    if let Some(DetailsAction::SelectCommit(id)) =
+        commit_details::show(ui, details, &mut state.selected_file)
+    {
+        actions.push(Action::SelectId(id));
+    }
+}
+
+fn repo_view(ui: &mut egui::Ui, state: &mut RepoState, actions: &mut Vec<Action>) {
+    if state.selected_commit().is_some() {
+        egui::TopBottomPanel::bottom("details_panel")
+            .resizable(true)
+            .default_height(ui.available_height() * 0.55)
+            .min_height(120.0)
+            .show_inside(ui, |ui| details_panel(ui, state, actions));
+    }
+
+    egui::CentralPanel::default().show_inside(ui, |ui| {
+        if state.commits.is_empty() && !state.log_loading {
+            ui.weak("Este repositorio todavía no tiene commits.");
+        }
+        let resp = state
+            .list
+            .show(ui, &state.commits, &state.graph, state.selected);
+        if let Some(i) = resp.selected {
+            actions.push(Action::Select(i));
+        }
+        if resp.wants_more {
+            actions.push(Action::LoadMore);
+        }
+    });
+}
+
 impl eframe::App for GitExileApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.handle_messages();
@@ -219,30 +352,23 @@ impl eframe::App for GitExileApp {
             self.error_bar(ui);
         });
 
-        let mut wants_more = false;
-        egui::CentralPanel::default().show(ctx, |ui| match &mut self.repo {
-            None => {
-                ui.centered_and_justified(|ui| {
-                    if ui.button("Abrir un repositorio git…").clicked() {
-                        self.pick_folder();
-                    }
-                });
-            }
-            Some(state) => {
-                if state.commits.is_empty() && !state.log_loading {
-                    ui.weak("Este repositorio todavía no tiene commits.");
+        let mut actions = Vec::new();
+        let mut pick = false;
+        egui::CentralPanel::default()
+            .frame(egui::Frame::central_panel(&ctx.style()).inner_margin(0.0))
+            .show(ctx, |ui| match &mut self.repo {
+                None => {
+                    ui.centered_and_justified(|ui| {
+                        pick = ui.button("Abrir un repositorio git…").clicked();
+                    });
                 }
-                let resp = state
-                    .list
-                    .show(ui, &state.commits, &state.graph, state.selected);
-                if let Some(i) = resp.selected {
-                    state.selected = Some(i);
-                }
-                wants_more = resp.wants_more;
-            }
-        });
-        if wants_more {
-            self.load_log_page();
+                Some(state) => repo_view(ui, state, &mut actions),
+            });
+        if pick {
+            self.pick_folder();
+        }
+        for action in actions {
+            self.apply(action);
         }
     }
 
