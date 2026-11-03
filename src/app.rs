@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use eframe::egui;
 
-use crate::git::{self, Commit, Repo};
+use crate::git::{self, Commit, Graph, Repo};
 use crate::ui::commit_list::CommitList;
 use crate::worker::Worker;
 
@@ -29,6 +29,7 @@ struct RepoState {
     repo: Repo,
     branch: Option<String>,
     commits: Vec<Commit>,
+    graph: Graph,
     log_complete: bool,
     log_loading: bool,
     selected: Option<usize>,
@@ -111,6 +112,7 @@ impl GitExileApp {
                         repo,
                         branch,
                         commits: Vec::new(),
+                        graph: Graph::default(),
                         log_complete: false,
                         log_loading: false,
                         selected: None,
@@ -130,6 +132,7 @@ impl GitExileApp {
                     match result {
                         Ok(page) if skip == state.commits.len() => {
                             state.log_complete = page.len() < LOG_PAGE;
+                            state.graph.extend(&page);
                             state.commits.extend(page);
                         }
                         Ok(_) => {}
@@ -229,7 +232,9 @@ impl eframe::App for GitExileApp {
                 if state.commits.is_empty() && !state.log_loading {
                     ui.weak("Este repositorio todavía no tiene commits.");
                 }
-                let resp = state.list.show(ui, &state.commits, state.selected);
+                let resp = state
+                    .list
+                    .show(ui, &state.commits, &state.graph, state.selected);
                 if let Some(i) = resp.selected {
                     state.selected = Some(i);
                 }

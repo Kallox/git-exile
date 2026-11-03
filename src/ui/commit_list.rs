@@ -3,7 +3,8 @@ use eframe::egui::{
     vec2,
 };
 
-use crate::git::{Commit, RefKind, RefLabel};
+use super::graph_view;
+use crate::git::{Commit, Graph, RefKind, RefLabel};
 
 pub const ROW_HEIGHT: f32 = 24.0;
 const HASH_WIDTH: f32 = 80.0;
@@ -35,6 +36,7 @@ impl CommitList {
         &mut self,
         ui: &mut Ui,
         commits: &[Commit],
+        graph: &Graph,
         selected: Option<usize>,
     ) -> ListResponse {
         let mut response = ListResponse::default();
@@ -42,6 +44,7 @@ impl CommitList {
             response.selected = Some(new);
         }
 
+        let graph_width = graph_view::width(graph.max_width());
         let mut area = ScrollArea::vertical().auto_shrink(false);
         if let Some(row) = self.scroll_to.take() {
             let top = row as f32 * ROW_HEIGHT;
@@ -62,7 +65,15 @@ impl CommitList {
                 let (rect, resp) =
                     ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
                 let is_selected = response.selected.or(selected) == Some(i);
-                paint_row(ui, rect, &commits[i], is_selected, resp.hovered());
+                paint_row(
+                    ui,
+                    rect,
+                    &commits[i],
+                    graph.rows.get(i),
+                    graph_width,
+                    is_selected,
+                    resp.hovered(),
+                );
                 if resp.clicked() {
                     response.selected = Some(i);
                 }
@@ -102,13 +113,35 @@ impl CommitList {
     }
 }
 
-fn paint_row(ui: &Ui, rect: Rect, commit: &Commit, selected: bool, hovered: bool) {
+fn paint_row(
+    ui: &Ui,
+    rect: Rect,
+    commit: &Commit,
+    graph_row: Option<&crate::git::GraphRow>,
+    graph_width: f32,
+    selected: bool,
+    hovered: bool,
+) {
     let visuals = ui.visuals();
     let painter = ui.painter_at(rect);
-    if selected {
-        painter.rect_filled(rect, 0.0, visuals.selection.bg_fill);
+    let bg = if selected {
+        visuals.selection.bg_fill
     } else if hovered {
-        painter.rect_filled(rect, 0.0, visuals.widgets.hovered.weak_bg_fill);
+        visuals.widgets.hovered.weak_bg_fill
+    } else {
+        visuals.panel_fill
+    };
+    if selected || hovered {
+        painter.rect_filled(rect, 0.0, bg);
+    }
+
+    if let Some(row) = graph_row {
+        let is_head = commit
+            .refs
+            .iter()
+            .any(|r| matches!(r.kind, RefKind::Head | RefKind::Branch { current: true }));
+        let graph_rect = Rect::from_min_size(rect.min, vec2(graph_width, rect.height()));
+        graph_view::paint_row(&painter, graph_rect, row, is_head, bg);
     }
 
     let text_color = if selected {
@@ -157,9 +190,10 @@ fn paint_row(ui: &Ui, rect: Rect, commit: &Commit, selected: bool, hovered: bool
         );
 
     // Etiquetas de ramas/tags y mensaje.
-    let summary_clip = Rect::from_x_y_ranges(rect.left()..=author_x - PADDING, rect.y_range());
+    let summary_left = rect.left() + graph_width;
+    let summary_clip = Rect::from_x_y_ranges(summary_left..=author_x - PADDING, rect.y_range());
     let painter = painter.with_clip_rect(summary_clip);
-    let mut x = rect.left() + PADDING;
+    let mut x = summary_left + PADDING;
     for label in &commit.refs {
         x = paint_ref(&painter, label, x, rect) + 4.0;
     }
