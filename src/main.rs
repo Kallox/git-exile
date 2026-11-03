@@ -1,5 +1,6 @@
 mod app;
 mod git;
+mod repo_tab;
 mod ui;
 mod worker;
 
@@ -8,7 +9,8 @@ use std::path::PathBuf;
 use app::GitExileApp;
 
 fn main() -> eframe::Result<()> {
-    let initial_path = std::env::args_os().nth(1).map(PathBuf::from);
+    // Cada ruta pasada como argumento se abre en una pestaña.
+    let paths: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
 
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
@@ -21,6 +23,6 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "git-exile",
         options,
-        Box::new(|cc| Ok(Box::new(GitExileApp::new(cc, initial_path)))),
+        Box::new(|cc| Ok(Box::new(GitExileApp::new(cc, paths)))),
     )
 }

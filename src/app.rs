@@ -1,117 +1,55 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use eframe::egui;
+use eframe::egui::{self, Key, Modifiers};
 
-use crate::git::{self, Commit, CommitDetails, FileDiff, Graph, Repo, WorkingTreeStatus};
-use crate::ui::commit_details::{self, DetailsAction};
-use crate::ui::commit_editor::{CommitEditor, EditorAction};
-use crate::ui::commit_list::{CommitList, ListRow};
-use crate::ui::diff_view;
-use crate::ui::status_panel::{self, StatusAction, WtFile};
+use crate::git::{self, Repo};
+use crate::repo_tab::{Jobs, RepoMessage, RepoTab};
 use crate::worker::Worker;
 
 const RECENT_KEY: &str = "recent_repositories";
+const OPEN_TABS_KEY: &str = "open_tabs";
+const ACTIVE_TAB_KEY: &str = "active_tab";
 const MAX_RECENT: usize = 10;
-const LOG_PAGE: usize = 500;
 
-/// Resultado de un trabajo en segundo plano.
-/// `epoch` identifica el repo abierto cuando se lanzó; si cambió, se descarta.
-struct Message {
-    epoch: u64,
-    kind: MessageKind,
+/// Resultado de un trabajo en segundo plano, etiquetado con su pestaña.
+/// Si la pestaña ya no existe, se descarta.
+pub struct Message {
+    pub tab: u64,
+    pub kind: MessageKind,
 }
 
-enum MessageKind {
-    Opened(git::Result<(Repo, Option<String>)>, PathBuf),
-    Log {
-        skip: usize,
-        result: git::Result<Vec<Commit>>,
-    },
-    Details {
-        id: String,
-        result: git::Result<CommitDetails>,
-    },
-    /// Estado del working tree y huella de las referencias.
-    Status(git::Result<(WorkingTreeStatus, String)>),
-    WorktreeDiff {
-        file: WtFile,
-        result: git::Result<FileDiff>,
-    },
-    /// Resultado de una operación que modifica el repositorio.
-    Done(git::Result<()>),
-    Committed(git::Result<String>),
-    LastMessage(git::Result<String>),
-    Ident(git::Result<String>),
+pub enum MessageKind {
+    Opened(git::Result<(Repo, Option<String>)>),
+    Repo(RepoMessage),
 }
 
-/// Lo que la interfaz pide hacer al terminar el frame.
-enum Action {
-    LoadMore,
-    Select(ListRow),
-    SelectId(String),
-    SelectWorktreeFile(WtFile),
-    Stage(Vec<String>),
-    Unstage(Vec<String>),
-    StageAll,
-    UnstageAll,
-    Commit { message: String, amend: bool },
-    LoadLastMessage,
-    Refresh,
+enum TabContent {
+    /// Abriendo el repositorio de esta ruta.
+    Loading(PathBuf),
+    Repo(Box<RepoTab>),
 }
 
-struct RepoState {
-    repo: Repo,
-    branch: Option<String>,
-    commits: Vec<Commit>,
-    graph: Graph,
-    log_complete: bool,
-    log_loading: bool,
-    list: CommitList,
-    selected: Option<ListRow>,
-
-    details: Option<CommitDetails>,
-    /// Commit cuyos detalles se están cargando.
-    details_loading: Option<String>,
-    selected_file: Option<usize>,
-
-    status: Option<WorkingTreeStatus>,
-    wt_file: Option<WtFile>,
-    wt_diff: Option<FileDiff>,
-    editor: CommitEditor,
-    /// Identidad con la que se harán los commits (`git var GIT_AUTHOR_IDENT`).
-    author: Option<String>,
-    /// Huella de ramas/tags/HEAD de la última lectura del estado.
-    refs: Option<String>,
-    /// Commit a volver a seleccionar cuando se recargue el historial.
-    reselect: Option<String>,
+struct Tab {
+    id: u64,
+    content: TabContent,
 }
 
-impl RepoState {
-    fn new(repo: Repo, branch: Option<String>) -> Self {
-        Self {
-            repo,
-            branch,
-            commits: Vec::new(),
-            graph: Graph::default(),
-            log_complete: false,
-            log_loading: false,
-            list: CommitList::default(),
-            selected: None,
-            details: None,
-            details_loading: None,
-            selected_file: None,
-            status: None,
-            wt_file: None,
-            wt_diff: None,
-            editor: CommitEditor::default(),
-            author: None,
-            refs: None,
-            reselect: None,
+impl Tab {
+    fn title(&self) -> String {
+        match &self.content {
+            TabContent::Loading(path) => path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.display().to_string()),
+            TabContent::Repo(repo) => repo.name(),
         }
     }
 
-    fn has_changes(&self) -> bool {
-        self.status.as_ref().is_some_and(|s| !s.is_clean())
+    fn path(&self) -> &Path {
+        match &self.content {
+            TabContent::Loading(path) => path,
+            TabContent::Repo(repo) => repo.repo.root(),
+        }
     }
 }
 
@@ -119,466 +57,281 @@ pub struct GitExileApp {
     worker: Worker<Message>,
     /// Si la ventana tenía el foco en el frame anterior.
     focused: bool,
-    epoch: u64,
-    repo: Option<RepoState>,
+    next_id: u64,
+    tabs: Vec<Tab>,
+    active: usize,
     recent: Vec<PathBuf>,
     error: Option<String>,
 }
 
 impl GitExileApp {
-    pub fn new(cc: &eframe::CreationContext<'_>, initial_path: Option<PathBuf>) -> Self {
-        let recent: Vec<PathBuf> = cc
-            .storage
+    pub fn new(cc: &eframe::CreationContext<'_>, paths: Vec<PathBuf>) -> Self {
+        let storage = cc.storage;
+        let recent: Vec<PathBuf> = storage
             .and_then(|s| eframe::get_value(s, RECENT_KEY))
+            .unwrap_or_default();
+        let open_tabs: Vec<PathBuf> = storage
+            .and_then(|s| eframe::get_value(s, OPEN_TABS_KEY))
+            .unwrap_or_default();
+        let active: usize = storage
+            .and_then(|s| eframe::get_value(s, ACTIVE_TAB_KEY))
             .unwrap_or_default();
 
         let mut app = Self {
             worker: Worker::new(cc.egui_ctx.clone()),
             focused: true,
-            epoch: 0,
-            repo: None,
+            next_id: 0,
+            tabs: Vec::new(),
+            active: 0,
             recent,
             error: None,
         };
 
         if let Err(e) = git::version() {
             app.error = Some(format!("No se encontró git en el PATH: {e}"));
-        } else if let Some(path) = initial_path.or_else(|| app.recent.first().cloned()) {
+            return app;
+        }
+        for path in open_tabs {
+            app.open(path);
+        }
+        app.active = active.min(app.tabs.len().saturating_sub(1));
+        for path in paths {
             app.open(path);
         }
         app
     }
 
-    fn spawn(&mut self, job: impl FnOnce() -> MessageKind + Send + 'static) {
-        let epoch = self.epoch;
-        self.worker.spawn(move || Message { epoch, kind: job() });
+    fn jobs(&mut self, tab: u64) -> Jobs<'_> {
+        Jobs {
+            worker: &mut self.worker,
+            tab,
+        }
     }
 
+    /// Abre `path` en una pestaña nueva, o activa la que ya lo tenga abierto.
     fn open(&mut self, path: PathBuf) {
-        self.epoch += 1;
-        self.spawn(move || {
-            let result = Repo::open(&path).and_then(|repo| {
+        if let Some(i) = self.tabs.iter().position(|t| same_path(t.path(), &path)) {
+            self.activate(i);
+            return;
+        }
+        let id = self.next_id;
+        self.next_id += 1;
+        self.tabs.push(Tab {
+            id,
+            content: TabContent::Loading(path.clone()),
+        });
+        self.active = self.tabs.len() - 1;
+        self.worker.spawn(move || Message {
+            tab: id,
+            kind: MessageKind::Opened(Repo::open(&path).and_then(|repo| {
                 let branch = repo.current_branch()?;
                 Ok((repo, branch))
-            });
-            MessageKind::Opened(result, path)
+            })),
         });
     }
 
-    fn load_log_page(&mut self) {
-        let Some(state) = &mut self.repo else { return };
-        if state.log_loading || state.log_complete {
+    fn activate(&mut self, index: usize) {
+        if index >= self.tabs.len() || index == self.active {
             return;
         }
-        state.log_loading = true;
-        let repo = state.repo.clone();
-        let skip = state.commits.len();
-        self.spawn(move || MessageKind::Log {
-            skip,
-            result: git::load_log(&repo, skip, LOG_PAGE),
-        });
+        self.active = index;
+        // Puede haber cambios desde la última vez que se miró.
+        self.refresh_active();
     }
 
-    /// Vuelve a leer el historial desde el principio (p. ej. tras un commit).
-    fn reload_log(&mut self) {
-        let Some(state) = &mut self.repo else { return };
-        state.graph = Graph::default();
-        state.log_complete = false;
-        state.log_loading = false;
-        if let Some(ListRow::Commit(i)) = state.selected {
-            state.reselect = state.commits.get(i).map(|c| c.id.clone());
-            state.selected = None;
+    fn close(&mut self, index: usize) {
+        if index >= self.tabs.len() {
+            return;
         }
-        state.commits.clear();
-        self.load_log_page();
-    }
-
-    fn refresh_status(&mut self) {
-        let Some(state) = &self.repo else { return };
-        let repo = state.repo.clone();
-        self.spawn(move || {
-            MessageKind::Status(
-                git::load_status(&repo).and_then(|s| Ok((s, repo.refs_fingerprint()?))),
-            )
-        });
-    }
-
-    fn select(&mut self, row: ListRow) {
-        let Some(state) = &mut self.repo else { return };
-        match row {
-            ListRow::WorkingTree => {
-                state.selected = Some(row);
-                let file = state
-                    .wt_file
-                    .clone()
-                    .or_else(|| state.status.as_ref().and_then(WtFile::first));
-                if let Some(file) = file {
-                    self.select_worktree_file(file);
-                }
-            }
-            ListRow::Commit(index) => {
-                if state.selected == Some(row) {
-                    return;
-                }
-                let Some(commit) = state.commits.get(index) else {
-                    return;
-                };
-                state.selected = Some(row);
-                let id = commit.id.clone();
-                let repo = state.repo.clone();
-                state.details_loading = Some(id.clone());
-                self.spawn(move || MessageKind::Details {
-                    result: git::load_commit(&repo, &id),
-                    id,
-                });
-            }
+        self.tabs.remove(index);
+        if self.active > index || self.active >= self.tabs.len() {
+            self.active = self.active.saturating_sub(1);
         }
     }
 
-    fn select_worktree_file(&mut self, file: WtFile) {
-        let Some(state) = &mut self.repo else { return };
-        let Some(entry) = state.status.as_ref().and_then(|s| file.find(s)).cloned() else {
-            state.wt_file = None;
-            state.wt_diff = None;
+    fn refresh_active(&mut self) {
+        let Some(tab) = self.tabs.get_mut(self.active) else {
             return;
         };
-        if state.wt_file.as_ref() != Some(&file) {
-            state.wt_diff = None;
-        }
-        state.wt_file = Some(file.clone());
-        let repo = state.repo.clone();
-        self.spawn(move || MessageKind::WorktreeDiff {
-            result: git::diff_entry(&repo, &entry, file.staged),
-            file,
-        });
-    }
-
-    /// Ejecuta una operación sobre el repo y después refresca el estado.
-    fn run_op(&mut self, op: impl FnOnce(&Repo) -> git::Result<()> + Send + 'static) {
-        let Some(state) = &self.repo else { return };
-        let repo = state.repo.clone();
-        self.spawn(move || MessageKind::Done(op(&repo)));
-        self.refresh_status();
-    }
-
-    /// Si el archivo seleccionado cambia de lista, la selección lo sigue.
-    fn follow_selection(&mut self, paths: &[String], staged: bool) {
-        let Some(state) = &mut self.repo else { return };
-        if let Some(file) = &mut state.wt_file
-            && paths.contains(&file.path)
-        {
-            file.staged = staged;
-        }
-    }
-
-    fn apply(&mut self, action: Action) {
-        match action {
-            Action::LoadMore => self.load_log_page(),
-            Action::Select(row) => self.select(row),
-            Action::SelectWorktreeFile(file) => self.select_worktree_file(file),
-            Action::Stage(paths) => {
-                self.follow_selection(&paths, true);
-                self.run_op(move |repo| git::stage(repo, &paths));
-            }
-            Action::Unstage(paths) => {
-                self.follow_selection(&paths, false);
-                self.run_op(move |repo| git::unstage(repo, &paths));
-            }
-            Action::StageAll => self.run_op(git::stage_all),
-            Action::Commit { message, amend } => {
-                let Some(state) = &mut self.repo else { return };
-                state.editor.committing = true;
-                let repo = state.repo.clone();
-                self.spawn(move || {
-                    MessageKind::Committed(git::create_commit(&repo, &message, amend))
-                });
-            }
-            Action::Refresh => self.refresh_status(),
-            Action::LoadLastMessage => {
-                let Some(state) = &self.repo else { return };
-                let repo = state.repo.clone();
-                self.spawn(move || MessageKind::LastMessage(git::last_commit_message(&repo)));
-            }
-            Action::UnstageAll => self.run_op(git::unstage_all),
-            Action::SelectId(id) => {
-                let index = self
-                    .repo
-                    .as_ref()
-                    .and_then(|s| s.commits.iter().position(|c| c.id == id));
-                if let Some(i) = index {
-                    if let Some(state) = &mut self.repo {
-                        state.list.scroll_to(ListRow::Commit(i));
-                    }
-                    self.select(ListRow::Commit(i));
-                }
-            }
+        if let TabContent::Repo(repo) = &mut tab.content {
+            let mut jobs = Jobs {
+                worker: &mut self.worker,
+                tab: tab.id,
+            };
+            repo.refresh_status(&mut jobs);
         }
     }
 
     fn handle_messages(&mut self) {
-        let mut select_initial = false;
-        let mut reload_wt = false;
-        let mut reload_log = false;
-        let mut refresh = false;
         for msg in self.worker.poll() {
-            if msg.epoch != self.epoch {
+            let Some(index) = self.tabs.iter().position(|t| t.id == msg.tab) else {
                 continue;
-            }
+            };
             match msg.kind {
-                MessageKind::Opened(Ok((repo, branch)), _) => {
+                MessageKind::Opened(Ok((repo, branch))) => {
                     let root = repo.root().to_path_buf();
                     self.recent.retain(|p| p != &root);
-                    self.recent.insert(0, root);
+                    self.recent.insert(0, root.clone());
                     self.recent.truncate(MAX_RECENT);
-                    self.repo = Some(RepoState::new(repo, branch));
-                    self.error = None;
-                    // El worker procesa en orden: el estado llega antes que el log.
-                    self.refresh_status();
-                    self.load_log_page();
-                    let repo = self.repo.as_ref().unwrap().repo.clone();
-                    self.spawn(move || MessageKind::Ident(git::author_ident(&repo)));
-                }
-                MessageKind::Opened(Err(e), path) => {
-                    self.error = Some(format!("No se pudo abrir {}: {e}", path.display()));
-                }
-                MessageKind::Log { skip, result } => {
-                    let Some(state) = &mut self.repo else {
-                        continue;
-                    };
-                    state.log_loading = false;
-                    match result {
-                        Ok(page) if skip == state.commits.len() => {
-                            state.log_complete = page.len() < LOG_PAGE;
-                            select_initial |= skip == 0;
-                            state.graph.extend(&page);
-                            state.commits.extend(page);
-                        }
-                        Ok(_) => {}
-                        Err(e) => {
-                            state.log_complete = true;
-                            self.error = Some(format!("Error leyendo el historial: {e}"));
-                        }
-                    }
-                }
-                MessageKind::Details { id, result } => {
-                    let Some(state) = &mut self.repo else {
-                        continue;
-                    };
-                    if state.details_loading.as_ref() != Some(&id) {
-                        continue;
-                    }
-                    state.details_loading = None;
-                    match result {
-                        Ok(details) => {
-                            state.selected_file = (!details.files.is_empty()).then_some(0);
-                            state.details = Some(details);
-                        }
-                        Err(e) => {
-                            state.details = None;
-                            self.error = Some(format!("Error leyendo el commit: {e}"));
-                        }
-                    }
-                }
-                MessageKind::Status(result) => {
-                    let Some(state) = &mut self.repo else {
-                        continue;
-                    };
-                    match result {
-                        Ok((status, refs)) => {
-                            state.branch = status.branch.clone();
-                            state.status = Some(status);
-                            reload_wt = true;
-                            // Cambios hechos fuera (terminal, otro programa...).
-                            if state.refs.is_some() && state.refs.as_ref() != Some(&refs) {
-                                reload_log = true;
-                            }
-                            state.refs = Some(refs);
-                        }
-                        Err(e) => self.error = Some(format!("Error leyendo el estado: {e}")),
-                    }
-                }
-                MessageKind::Committed(result) => {
-                    let Some(state) = &mut self.repo else {
-                        continue;
-                    };
-                    state.editor.committing = false;
-                    match result {
-                        Ok(_) => {
-                            state.editor.clear();
-                            // El refresco del estado detecta el nuevo commit y recarga el log.
-                            refresh = true;
-                        }
-                        Err(e) => self.error = Some(format!("No se pudo crear el commit: {e}")),
-                    }
-                }
-                MessageKind::LastMessage(result) => {
-                    let Some(state) = &mut self.repo else {
-                        continue;
-                    };
-                    match result {
-                        Ok(message) if state.editor.amend => state.editor.set_message(&message),
-                        Ok(_) => {}
-                        Err(e) => self.error = Some(e.to_string()),
-                    }
-                }
-                MessageKind::Ident(result) => {
-                    let Some(state) = &mut self.repo else {
-                        continue;
-                    };
-                    match result {
-                        Ok(ident) => state.author = Some(ident),
-                        // Sin user.name/user.email: git lo explicará al hacer commit.
-                        Err(_) => state.author = None,
-                    }
-                }
-                MessageKind::Done(result) => {
-                    if let Err(e) = result {
-                        self.error = Some(e.to_string());
-                    }
-                }
-                MessageKind::WorktreeDiff { file, result } => {
-                    let Some(state) = &mut self.repo else {
-                        continue;
-                    };
-                    if state.wt_file.as_ref() != Some(&file) {
-                        continue;
-                    }
-                    match result {
-                        Ok(diff) => state.wt_diff = Some(diff),
-                        Err(e) => {
-                            state.wt_diff = None;
-                            self.error = Some(format!("Error leyendo el diff: {e}"));
-                        }
-                    }
-                }
-            }
-        }
 
-        if select_initial && let Some(state) = &mut self.repo {
-            let reselect = state
-                .reselect
-                .take()
-                .and_then(|id| state.commits.iter().position(|c| c.id == id));
-            let row = if let Some(i) = reselect {
-                ListRow::Commit(i)
-            } else if state.selected == Some(ListRow::WorkingTree) || state.has_changes() {
-                ListRow::WorkingTree
-            } else {
-                ListRow::Commit(0)
-            };
-            // Tras recargar, los detalles del commit siguen siendo válidos si es el mismo.
-            if let ListRow::Commit(i) = row
-                && state.details.as_ref().map(|d| &d.id) == Some(&state.commits[i].id)
-            {
-                state.selected = Some(row);
-                state.list.scroll_to(row);
-            } else {
-                self.select(row);
+                    // Se abrió desde una subcarpeta de un repo que ya estaba abierto.
+                    let existing = self.tabs.iter().position(|t| {
+                        t.id != msg.tab
+                            && matches!(&t.content, TabContent::Repo(r) if same_path(r.repo.root(), &root))
+                    });
+                    if let Some(existing) = existing {
+                        let was_active = self.active == index;
+                        self.close(index);
+                        if was_active {
+                            let existing = self
+                                .tabs
+                                .iter()
+                                .position(|t| same_path(t.path(), &root))
+                                .unwrap_or(existing);
+                            self.activate(existing);
+                        }
+                        continue;
+                    }
+                    let mut jobs = self.jobs(msg.tab);
+                    let repo = RepoTab::new(repo, branch, &mut jobs);
+                    self.tabs[index].content = TabContent::Repo(Box::new(repo));
+                }
+                MessageKind::Opened(Err(e)) => {
+                    let path = self.tabs[index].path().display().to_string();
+                    self.error = Some(format!("No se pudo abrir {path}: {e}"));
+                    self.close(index);
+                }
+                MessageKind::Repo(repo_msg) => {
+                    let tab = &mut self.tabs[index];
+                    if let TabContent::Repo(repo) = &mut tab.content {
+                        let mut jobs = Jobs {
+                            worker: &mut self.worker,
+                            tab: tab.id,
+                        };
+                        repo.handle(repo_msg, &mut jobs);
+                    }
+                }
             }
-        }
-        if reload_wt {
-            self.after_status_change();
-        }
-        if refresh {
-            self.refresh_status();
-        }
-        if reload_log {
-            self.reload_log();
-        }
-    }
-
-    /// Mantiene coherente la vista de cambios cuando cambia el estado.
-    fn after_status_change(&mut self) {
-        let Some(state) = &mut self.repo else { return };
-        if state.selected != Some(ListRow::WorkingTree) {
-            return;
-        }
-        if !state.has_changes() {
-            state.wt_file = None;
-            state.wt_diff = None;
-            if !state.commits.is_empty() {
-                self.select(ListRow::Commit(0));
-            }
-            return;
-        }
-        let status = state.status.as_ref().unwrap();
-        let file = state
-            .wt_file
-            .clone()
-            .filter(|f| f.find(status).is_some())
-            .or_else(|| WtFile::first(status));
-        if let Some(file) = file {
-            self.select_worktree_file(file);
         }
     }
 
     fn pick_folder(&mut self) {
         let mut dialog = rfd::FileDialog::new().set_title("Abrir repositorio");
-        if let Some(state) = &self.repo {
-            dialog = dialog.set_directory(state.repo.root());
+        if let Some(tab) = self.tabs.get(self.active) {
+            dialog = dialog.set_directory(tab.path());
         }
         if let Some(path) = dialog.pick_folder() {
             self.open(path);
         }
     }
 
-    fn top_bar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            if ui.button("Abrir…").clicked() {
-                self.pick_folder();
-            }
+    fn keyboard(&mut self, ctx: &egui::Context) {
+        let (close, next, prev) = ctx.input_mut(|i| {
+            (
+                i.consume_key(Modifiers::COMMAND, Key::W),
+                i.consume_key(Modifiers::COMMAND, Key::Tab),
+                i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::Tab),
+            )
+        });
+        let n = self.tabs.len();
+        if n == 0 {
+            return;
+        }
+        if close {
+            self.close(self.active);
+        } else if next {
+            self.activate((self.active + 1) % n);
+        } else if prev {
+            self.activate((self.active + n - 1) % n);
+        }
+    }
 
-            let mut to_open = None;
-            ui.menu_button("Recientes", |ui| {
-                if self.recent.is_empty() {
-                    ui.label("Sin repositorios recientes");
-                }
-                for path in &self.recent {
-                    if ui.button(path.display().to_string()).clicked() {
-                        to_open = Some(path.clone());
-                        ui.close();
+    fn tab_bar(&mut self, ui: &mut egui::Ui) {
+        let mut activate = None;
+        let mut close = None;
+        let mut open = None;
+        let mut pick = false;
+
+        ui.horizontal(|ui| {
+            egui::ScrollArea::horizontal()
+                .max_width(ui.available_width() - 220.0)
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        for (i, tab) in self.tabs.iter().enumerate() {
+                            let active = i == self.active;
+                            let frame = egui::Frame::new()
+                                .inner_margin(egui::Margin::symmetric(6, 2))
+                                .corner_radius(4)
+                                .fill(if active {
+                                    ui.visuals().selection.bg_fill
+                                } else {
+                                    ui.visuals().faint_bg_color
+                                });
+                            frame.show(ui, |ui| {
+                                let mut title = egui::RichText::new(tab.title());
+                                if active {
+                                    title = title.color(ui.visuals().selection.stroke.color);
+                                }
+                                if matches!(tab.content, TabContent::Loading(_)) {
+                                    ui.spinner();
+                                }
+                                let resp = ui
+                                    .add(egui::Label::new(title).sense(egui::Sense::click()))
+                                    .on_hover_text(tab.path().display().to_string());
+                                if resp.clicked() {
+                                    activate = Some(i);
+                                }
+                                if resp.middle_clicked() {
+                                    close = Some(i);
+                                }
+                                if ui
+                                    .small_button("x")
+                                    .on_hover_text("Cerrar pestaña (Ctrl+W)")
+                                    .clicked()
+                                {
+                                    close = Some(i);
+                                }
+                            });
+                        }
+                        if ui
+                            .button("+")
+                            .on_hover_text("Abrir otro repositorio")
+                            .clicked()
+                        {
+                            pick = true;
+                        }
+                    });
+                });
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.menu_button("Recientes", |ui| {
+                    if self.recent.is_empty() {
+                        ui.label("Sin repositorios recientes");
                     }
+                    for path in &self.recent {
+                        if ui.button(path.display().to_string()).clicked() {
+                            open = Some(path.clone());
+                            ui.close();
+                        }
+                    }
+                });
+                if self.worker.is_busy() {
+                    ui.spinner();
                 }
             });
-            if let Some(path) = to_open {
-                self.open(path);
-            }
-
-            let mut refresh = false;
-            if self.repo.is_some() {
-                refresh = ui
-                    .button("Refrescar")
-                    .on_hover_text("Volver a leer el repositorio (F5)")
-                    .clicked();
-            }
-            if refresh {
-                self.refresh_status();
-            }
-
-            if let Some(state) = &self.repo {
-                ui.separator();
-                ui.strong(state.repo.name());
-                ui.label(match &state.branch {
-                    Some(b) => format!("rama: {b}"),
-                    None => "HEAD separado".to_owned(),
-                })
-                .on_hover_text(state.repo.root().display().to_string());
-                if let Some(status) = &state.status
-                    && let Some(upstream) = &status.upstream
-                {
-                    ui.weak(format!(
-                        "{upstream} (+{} / -{})",
-                        status.ahead, status.behind
-                    ));
-                }
-            }
-
-            if self.worker.is_busy() {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.spinner();
-                });
-            }
         });
+
+        if let Some(i) = close {
+            self.close(i);
+        } else if let Some(i) = activate {
+            self.activate(i);
+        }
+        if let Some(path) = open {
+            self.open(path);
+        }
+        if pick {
+            self.pick_folder();
+        }
     }
 
     fn error_bar(&mut self, ui: &mut egui::Ui) {
@@ -586,167 +339,96 @@ impl GitExileApp {
         if let Some(error) = &self.error {
             ui.horizontal(|ui| {
                 ui.colored_label(ui.visuals().error_fg_color, error);
-                close = ui.small_button("✖").clicked();
+                close = ui.small_button("Cerrar").clicked();
             });
         }
         if close {
             self.error = None;
         }
     }
-}
 
-fn details_panel(ui: &mut egui::Ui, state: &mut RepoState, actions: &mut Vec<Action>) {
-    let Some(details) = &state.details else {
-        ui.centered_and_justified(|ui| {
-            if state.details_loading.is_some() {
-                ui.spinner();
-            } else {
-                ui.weak("Selecciona un commit para ver sus cambios.");
-            }
-        });
-        return;
-    };
-    egui::SidePanel::left("commit_info")
-        .resizable(true)
-        .default_width(ui.available_width() * 0.4)
-        .min_width(200.0)
-        .show_inside(ui, |ui| {
-            if let Some(DetailsAction::SelectCommit(id)) =
-                commit_details::show(ui, details, &mut state.selected_file)
-            {
-                actions.push(Action::SelectId(id));
-            }
-        });
-    egui::CentralPanel::default().show_inside(ui, |ui| {
-        match state.selected_file.and_then(|i| details.files.get(i)) {
-            Some(file) => diff_view::show(ui, file),
-            None => diff_view::placeholder(ui, "Selecciona un archivo para ver el diff."),
-        }
-    });
-}
-
-fn worktree_panel(ui: &mut egui::Ui, state: &mut RepoState, actions: &mut Vec<Action>) {
-    let Some(status) = &state.status else {
-        ui.spinner();
-        return;
-    };
-    egui::SidePanel::left("worktree_files")
-        .resizable(true)
-        .default_width(ui.available_width() * 0.4)
-        .min_width(200.0)
-        .show_inside(ui, |ui| {
-            egui::TopBottomPanel::bottom("commit_editor")
-                .resizable(false)
-                .show_inside(ui, |ui| {
-                    ui.add_space(4.0);
-                    let editor_action =
-                        state
-                            .editor
-                            .show(ui, status.staged.len(), state.author.as_deref());
-                    match editor_action {
-                        Some(EditorAction::Commit { message, amend }) => {
-                            actions.push(Action::Commit { message, amend })
-                        }
-                        Some(EditorAction::LoadLastMessage) => {
-                            actions.push(Action::LoadLastMessage)
-                        }
-                        None => {}
+    fn empty_view(&mut self, ui: &mut egui::Ui) {
+        let mut pick = false;
+        let mut open = None;
+        ui.vertical_centered(|ui| {
+            ui.add_space(ui.available_height() * 0.3);
+            ui.heading("git-exile");
+            ui.add_space(12.0);
+            pick = ui.button("Abrir un repositorio…").clicked();
+            if !self.recent.is_empty() {
+                ui.add_space(16.0);
+                ui.weak("Recientes");
+                for path in &self.recent {
+                    if ui.link(path.display().to_string()).clicked() {
+                        open = Some(path.clone());
                     }
-                });
-            if let Some(action) = status_panel::show(ui, status, state.wt_file.as_ref()) {
-                actions.push(match action {
-                    StatusAction::Select(file) => Action::SelectWorktreeFile(file),
-                    StatusAction::Stage(paths) => Action::Stage(paths),
-                    StatusAction::Unstage(paths) => Action::Unstage(paths),
-                    StatusAction::StageAll => Action::StageAll,
-                    StatusAction::UnstageAll => Action::UnstageAll,
-                });
+                }
             }
         });
-    egui::CentralPanel::default().show_inside(ui, |ui| match &state.wt_diff {
-        Some(diff) => diff_view::show(ui, diff),
-        None if state.wt_file.is_some() => {
-            ui.centered_and_justified(|ui| ui.spinner());
+        if pick {
+            self.pick_folder();
         }
-        None => diff_view::placeholder(ui, "Selecciona un archivo para ver el diff."),
-    });
+        if let Some(path) = open {
+            self.open(path);
+        }
+    }
 }
 
-fn repo_view(ui: &mut egui::Ui, state: &mut RepoState, actions: &mut Vec<Action>) {
-    // Si los cambios desaparecen, la fila deja de existir.
-    if state.selected == Some(ListRow::WorkingTree) && !state.has_changes() {
-        state.selected = None;
+/// Compara rutas resolviendo enlaces simbólicos cuando es posible.
+fn same_path(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
     }
-    if state.selected.is_some() {
-        egui::TopBottomPanel::bottom("details_panel")
-            .resizable(true)
-            .default_height(ui.available_height() * 0.55)
-            .min_height(120.0)
-            .show_inside(ui, |ui| match state.selected {
-                Some(ListRow::WorkingTree) => worktree_panel(ui, state, actions),
-                _ => details_panel(ui, state, actions),
-            });
-    }
-
-    egui::CentralPanel::default().show_inside(ui, |ui| {
-        let changes = state
-            .status
-            .as_ref()
-            .filter(|s| !s.is_clean())
-            .map(|s| s.change_count());
-        if state.commits.is_empty() && changes.is_none() && !state.log_loading {
-            ui.weak("Este repositorio todavía no tiene commits.");
-        }
-        let resp = state
-            .list
-            .show(ui, &state.commits, &state.graph, state.selected, changes);
-        if let Some(row) = resp.selected {
-            actions.push(Action::Select(row));
-        }
-        if resp.wants_more {
-            actions.push(Action::LoadMore);
-        }
-    });
 }
 
 impl eframe::App for GitExileApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.handle_messages();
+        self.keyboard(ctx);
 
         // Refrescar con F5 o al volver a la ventana (puede haber cambios hechos fuera).
         let focused = ctx.input(|i| i.focused);
         let regained_focus = focused && !self.focused;
         self.focused = focused;
-        if regained_focus || ctx.input(|i| i.key_pressed(egui::Key::F5)) {
-            self.apply(Action::Refresh);
+        if regained_focus || ctx.input(|i| i.key_pressed(Key::F5)) {
+            self.refresh_active();
         }
 
-        egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
-            self.top_bar(ui);
+        egui::TopBottomPanel::top("tab_bar").show(ctx, |ui| {
+            self.tab_bar(ui);
             self.error_bar(ui);
         });
 
-        let mut actions = Vec::new();
-        let mut pick = false;
         egui::CentralPanel::default()
             .frame(egui::Frame::central_panel(&ctx.style()).inner_margin(0.0))
-            .show(ctx, |ui| match &mut self.repo {
-                None => {
-                    ui.centered_and_justified(|ui| {
-                        pick = ui.button("Abrir un repositorio git…").clicked();
-                    });
+            .show(ctx, |ui| {
+                let Some(tab) = self.tabs.get_mut(self.active) else {
+                    self.empty_view(ui);
+                    return;
+                };
+                match &mut tab.content {
+                    TabContent::Loading(path) => {
+                        ui.centered_and_justified(|ui| {
+                            ui.label(format!("Abriendo {}…", path.display()));
+                        });
+                    }
+                    TabContent::Repo(repo) => {
+                        let mut jobs = Jobs {
+                            worker: &mut self.worker,
+                            tab: tab.id,
+                        };
+                        // Cada pestaña guarda su propio scroll y estado de widgets.
+                        ui.push_id(tab.id, |ui| repo.ui(ui, &mut jobs));
+                    }
                 }
-                Some(state) => repo_view(ui, state, &mut actions),
             });
-        if pick {
-            self.pick_folder();
-        }
-        for action in actions {
-            self.apply(action);
-        }
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        let open: Vec<PathBuf> = self.tabs.iter().map(|t| t.path().to_path_buf()).collect();
         eframe::set_value(storage, RECENT_KEY, &self.recent);
+        eframe::set_value(storage, OPEN_TABS_KEY, &open);
+        eframe::set_value(storage, ACTIVE_TAB_KEY, &self.active);
     }
 }
