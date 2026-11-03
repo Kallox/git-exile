@@ -141,8 +141,10 @@ mod tests {
 
     #[test]
     fn builds_message_from_fields() {
-        let mut e = CommitEditor::default();
-        e.summary = "  Resumen ".into();
+        let mut e = CommitEditor {
+            summary: "  Resumen ".into(),
+            ..Default::default()
+        };
         assert_eq!(e.message(), "Resumen\n");
         e.body = "Línea 1\nLínea 2\n\n".into();
         assert_eq!(e.message(), "Resumen\n\nLínea 1\nLínea 2\n");

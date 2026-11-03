@@ -48,6 +48,7 @@ pub struct Graph {
 }
 
 impl Graph {
+    #[cfg(test)]
     pub fn new(commits: &[Commit]) -> Self {
         let mut graph = Self::default();
         graph.extend(commits);
