@@ -83,6 +83,8 @@ enum Action {
     CloseDialog,
     /// Cambiar a una rama local por nombre.
     SwitchTo(String),
+    /// Mover HEAD a un commit (por hash), sin rama.
+    CheckoutCommit(String),
 }
 
 pub struct RepoTab {
@@ -321,6 +323,9 @@ impl RepoTab {
                         None => repo.git(&["switch", &name]).map(drop),
                     }
                 });
+            }
+            Action::CheckoutCommit(id) => {
+                self.run_op(jobs, move |repo| git::checkout_commit(repo, &id));
             }
             Action::SelectId(id) => {
                 if let Some(i) = self.commits.iter().position(|c| c.id == id) {
@@ -776,6 +781,11 @@ impl RepoTab {
                         actions.push(Action::NewBranch(Some(i)))
                     }
                     Some(ContextAction::SwitchBranch(name)) => actions.push(Action::SwitchTo(name)),
+                    Some(ContextAction::Checkout(i)) => {
+                        if let Some(commit) = self.commits.get(i) {
+                            actions.push(Action::CheckoutCommit(commit.id.clone()));
+                        }
+                    }
                     None => {}
                 }
             });

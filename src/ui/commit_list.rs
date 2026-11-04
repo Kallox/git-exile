@@ -39,6 +39,7 @@ pub struct CommitList {
 pub enum ContextAction {
     CreateBranch(usize),
     SwitchBranch(String),
+    Checkout(usize),
 }
 
 #[derive(Default)]
@@ -217,6 +218,17 @@ impl CommitList {
                                     Some(ContextAction::SwitchBranch(label.name.clone()));
                                 ui.close();
                             }
+                        }
+                        // Con HEAD separado en este commit no hay adónde moverse.
+                        let at_head = commits[i].refs.iter().any(|r| r.kind == RefKind::Head);
+                        if !at_head
+                            && ui
+                                .button("Hacer checkout de este commit")
+                                .on_hover_text("Mueve HEAD a este commit, sin rama (HEAD separado)")
+                                .clicked()
+                        {
+                            response.context = Some(ContextAction::Checkout(i));
+                            ui.close();
                         }
                         ui.separator();
                         if ui.button("Copiar hash").clicked() {

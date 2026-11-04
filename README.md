@@ -23,6 +23,7 @@ credential helpers, etc.).
 - Editor de commits con resumen, descripción y opción de amend.
 - Crear ramas a partir del commit seleccionado (por defecto HEAD), con opción de cambiar a ellas.
 - Cambiar entre todas las ramas locales y remotas desde un selector con filtro.
+- Hacer checkout de cualquier commit desde su menú contextual (HEAD separado).
 - Refresco manual, con F5 o automático al volver a la ventana.
 - Varios repositorios abiertos a la vez en pestañas. Las pestañas abiertas se recuerdan entre sesiones.
 - Buscador de repositorios integrado: navegar por carpetas, filtrar, buscar repositorios de forma
@@ -74,6 +75,9 @@ En el panel izquierdo están los repositorios abiertos y los recientes para abri
   escribiendo y pulsar Enter para cambiar a la primera que coincida. Al elegir una rama remota se cambia a
   la rama local del mismo nombre, o se crea una que la siga. Con clic derecho sobre un commit también se
   puede cambiar a las ramas que apuntan a él.
+- **Moverse a un commit**: clic derecho sobre un commit, "Hacer checkout de este commit". HEAD queda
+  separado (sin rama), y el botón de rama lo indica. Para volver basta con elegir una rama; para conservar
+  commits hechos ahí, crea antes una rama con "Nueva rama".
 
 Los cambios sin commitear se mantienen al cambiar de rama; si chocan con la rama de destino, git rechaza
 el cambio y se muestra su mensaje.
@@ -116,7 +120,7 @@ src/
 │   ├── graph.rs         Cálculo de carriles del grafo
 │   ├── details.rs       Detalles de un commit
 │   ├── diff.rs          Parser de diffs unificados
-│   ├── branch.rs        Listar, crear y cambiar de rama
+│   ├── branch.rs        Listar, crear y cambiar de rama, checkout de commits
 │   ├── status.rs        Estado del working tree
 │   ├── worktree.rs      Diffs de cambios sin commitear
 │   └── commit.rs        Añadir/quitar del índice y crear commits

@@ -1,4 +1,4 @@
-//! Ramas: listar, crear y cambiar.
+//! Ramas: listar, crear, cambiar y moverse a un commit.
 
 use super::repo::Repo;
 use super::runner::{GitError, Result};
@@ -102,6 +102,11 @@ pub fn switch_branch(repo: &Repo, branch: &Branch, branches: &[Branch]) -> Resul
     }
 }
 
+/// Mueve HEAD al commit `id` sin rama (HEAD separado).
+pub fn checkout_commit(repo: &Repo, id: &str) -> Result<()> {
+    repo.git(&["switch", "--detach", id]).map(drop)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,6 +144,38 @@ mod tests {
         let main = branches.iter().find(|b| b.name == "main").unwrap();
         switch_branch(&repo, main, &branches).unwrap();
         assert_eq!(repo.current_branch().unwrap().as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn checks_out_commit_detaching_head() {
+        let t = TestRepo::new();
+        let first = t.commit_file("a.txt", "1\n", "first");
+        t.commit_file("a.txt", "2\n", "second");
+        let repo = Repo::open(t.path()).unwrap();
+
+        checkout_commit(&repo, &first).unwrap();
+        assert_eq!(repo.current_branch().unwrap(), None);
+        assert_eq!(repo.git(&["rev-parse", "HEAD"]).unwrap().trim(), first);
+        assert_eq!(
+            std::fs::read_to_string(t.path().join("a.txt")).unwrap(),
+            "1\n"
+        );
+    }
+
+    #[test]
+    fn checkout_commit_refuses_to_overwrite_local_changes() {
+        let t = TestRepo::new();
+        let first = t.commit_file("a.txt", "1\n", "first");
+        t.commit_file("a.txt", "2\n", "second");
+        std::fs::write(t.path().join("a.txt"), "local\n").unwrap();
+        let repo = Repo::open(t.path()).unwrap();
+
+        assert!(checkout_commit(&repo, &first).is_err());
+        assert_eq!(repo.current_branch().unwrap().as_deref(), Some("main"));
+        assert_eq!(
+            std::fs::read_to_string(t.path().join("a.txt")).unwrap(),
+            "local\n"
+        );
     }
 
     #[test]
