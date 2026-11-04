@@ -1,0 +1,67 @@
+name: Release
+
+# Con una etiqueta `v*` publica los ejecutables en una Release. A mano
+# (workflow_dispatch) solo prueba y compila, sin publicar nada.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Una distro antigua: el binario depende de la glibc con la que se compila.
+          - name: linux-x86_64
+            os: ubuntu-22.04
+          - name: windows-x86_64
+            os: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Instalar dependencias de Linux
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev libwayland-dev libx11-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev
+
+      - name: Tests
+        run: cargo test --locked
+
+      - name: Compilar
+        run: cargo build --release --locked
+
+      - name: Empaquetar (Linux)
+        if: runner.os == 'Linux'
+        run: tar -czf git-exile-${{ matrix.name }}.tar.gz -C target/release git-exile
+
+      - name: Empaquetar (Windows)
+        if: runner.os == 'Windows'
+        run: Compress-Archive -Path target/release/git-exile.exe -DestinationPath git-exile-${{ matrix.name }}.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: git-exile-${{ matrix.name }}
+          path: git-exile-${{ matrix.name }}.*
+
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: git-exile-*
+          generate_release_notes: true

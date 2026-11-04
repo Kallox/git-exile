@@ -48,7 +48,7 @@ pub fn unstage_all(repo: &Repo) -> Result<()> {
 /// como en HEAD, incluidos sus cambios sin añadir; sin él solo deshace lo que no
 /// está en el índice. Los archivos que HEAD no conoce se borran del disco.
 pub fn discard(repo: &Repo, entry: &StatusEntry, staged: bool) -> Result<()> {
-    // Las rutas son literales: un archivo llamado `*.txt` no debe afectar a otros.
+    // Las rutas son literales: un archivo llamado `[a].txt` no debe afectar a `a.txt`.
     let git = |args: &[&str]| {
         let mut all = vec!["--literal-pathspecs"];
         all.extend(args);
@@ -233,9 +233,10 @@ mod tests {
     fn discard_treats_paths_literally() {
         let t = TestRepo::new();
         t.commit_file("a.txt", "1\n", "first");
-        t.commit_file("*.txt", "1\n", "second");
+        // Como patrón, `[a].txt` coincidiría con `a.txt`.
+        t.commit_file("[a].txt", "1\n", "second");
         t.write("a.txt", "2\n");
-        t.write("*.txt", "2\n");
+        t.write("[a].txt", "2\n");
         t.write("[n]ew.bin", "x\n");
         t.write("new.bin", "x\n");
         let repo = Repo::open(t.path()).unwrap();
@@ -245,8 +246,8 @@ mod tests {
             kind,
         };
 
-        discard(&repo, &entry("*.txt", ChangeKind::Modified), false).unwrap();
-        assert_eq!(read(&t, "*.txt").as_deref(), Some("1\n"));
+        discard(&repo, &entry("[a].txt", ChangeKind::Modified), false).unwrap();
+        assert_eq!(read(&t, "[a].txt").as_deref(), Some("1\n"));
         assert_eq!(read(&t, "a.txt").as_deref(), Some("2\n"));
 
         discard(&repo, &entry("[n]ew.bin", ChangeKind::Untracked), false).unwrap();

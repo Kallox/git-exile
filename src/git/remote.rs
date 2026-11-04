@@ -93,7 +93,8 @@ fn host(url: &str) -> Option<&str> {
         return host.split(':').next().filter(|h| !h.is_empty());
     }
     let (start, _) = url.split_once(':')?;
-    if start.contains('/') {
+    // Una ruta relativa, o de Windows (`C:\\repos\\b`).
+    if start.contains('/') || start.len() == 1 {
         return None;
     }
     let host = start.rsplit_once('@').map_or(start, |(_, h)| h);
@@ -132,6 +133,8 @@ mod tests {
             ("https://git.empresa.com:8443/a/b", other("git.empresa.com")),
             ("/srv/git/b.git", Hosting::Disk),
             ("../b.git", Hosting::Disk),
+            ("C:\\repos\\b.git", Hosting::Disk),
+            ("D:/repos/b.git", Hosting::Disk),
             ("./con:dos/puntos", Hosting::Disk),
             ("file:///srv/git/b.git", Hosting::Disk),
         ] {

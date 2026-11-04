@@ -359,7 +359,8 @@ fn visuals() -> egui::Visuals {
     v
 }
 
-/// Usa Inter y JetBrains Mono si están instaladas; si no, las fuentes de egui.
+/// Usa Inter y JetBrains Mono si están instaladas; si no, las del sistema en
+/// Windows (Segoe UI y Consolas) o las de egui.
 fn fonts() -> FontDefinitions {
     let mut defs = FontDefinitions::default();
     let files = font_files();
@@ -381,9 +382,14 @@ fn fonts() -> FontDefinitions {
         "Inter-Regular.otf",
         "InterVariable.ttf",
         "Inter.ttc",
+        "segoeui.ttf",
     ]);
-    let semibold_data = find(&["Inter-SemiBold.ttf", "Inter-SemiBold.otf"]);
-    let mono = find(&["JetBrainsMono-Regular.ttf", "JetBrainsMonoNL-Regular.ttf"]);
+    let semibold_data = find(&["Inter-SemiBold.ttf", "Inter-SemiBold.otf", "seguisb.ttf"]);
+    let mono = find(&[
+        "JetBrainsMono-Regular.ttf",
+        "JetBrainsMonoNL-Regular.ttf",
+        "consola.ttf",
+    ]);
 
     if let Some(data) = regular {
         add(&mut defs, "inter", data);
@@ -407,7 +413,7 @@ fn families(defs: &mut FontDefinitions, family: FontFamily) -> &mut Vec<String> 
     defs.families.entry(family).or_default()
 }
 
-/// Archivos de fuentes en las carpetas habituales (Linux).
+/// Archivos de fuentes en las carpetas habituales de Linux y Windows.
 fn font_files() -> Vec<PathBuf> {
     let mut dirs = vec![
         PathBuf::from("/usr/share/fonts"),
@@ -416,6 +422,12 @@ fn font_files() -> Vec<PathBuf> {
     if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
         dirs.push(home.join(".local/share/fonts"));
         dirs.push(home.join(".fonts"));
+    }
+    if let Some(windir) = std::env::var_os("WINDIR").map(PathBuf::from) {
+        dirs.push(windir.join("Fonts"));
+    }
+    if let Some(local) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+        dirs.push(local.join("Microsoft/Windows/Fonts"));
     }
     let mut files = Vec::new();
     for dir in dirs {

@@ -37,13 +37,25 @@ credential helpers, etc.).
   recursiva y abrirlos con "Abrir repositorio".
 - Lista de repositorios recientes.
 
+## Instalación
+
+Cada versión publica ejecutables en la página de Releases del repositorio; no hace falta instalar Rust.
+
+- **Linux**: descarga `git-exile-linux-x86_64.tar.gz`, descomprímelo y ejecuta `./git-exile`.
+- **Windows**: descarga `git-exile-windows-x86_64.zip`, descomprímelo y abre `git-exile.exe`. Necesita
+  [Git para Windows](https://git-scm.com/download/win).
+
+Para publicar una versión basta con subir una etiqueta (`git tag v0.1.0 && git push origin v0.1.0`):
+el workflow `.github/workflows/release.yml` pasa los tests, compila ambos ejecutables y crea la Release.
+
 ## Requisitos
 
-- Rust 1.89 o superior.
 - `git` instalado y disponible en el `PATH` (se recomienda 2.31 o superior).
 - En Linux, las bibliotecas habituales de X11 o Wayland que necesita `eframe`.
+- Para compilar desde el código, Rust 1.89 o superior.
 - Opcional: las fuentes Inter y JetBrains Mono (`pacman -S inter-font ttf-jetbrains-mono`). Si están
-  instaladas se usan automáticamente; si no, se usan las fuentes por defecto de egui.
+  instaladas se usan automáticamente; si no, se usan Segoe UI y Consolas en Windows, y las fuentes por
+  defecto de egui en Linux.
 
 ## Compilación y uso
 

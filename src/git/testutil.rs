@@ -18,6 +18,7 @@ impl TestRepo {
             ("user.email", "test@example.com"),
             ("commit.gpgsign", "false"),
             ("tag.gpgsign", "false"),
+            ("core.autocrlf", "false"),
         ] {
             t.git(&["config", key, value]);
         }
