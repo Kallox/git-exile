@@ -8,6 +8,7 @@ mod details;
 mod diff;
 mod graph;
 mod log;
+mod remote;
 mod repo;
 mod runner;
 mod status;
@@ -24,6 +25,9 @@ pub use details::{CommitDetails, Person, load_commit};
 pub use diff::{DiffLine, FileDiff, FileStatus, Hunk, LineKind};
 pub use graph::{Graph, GraphRow, Half};
 pub use log::{Commit, RefKind, RefLabel, load_log};
+#[cfg(test)]
+pub use remote::Hosting;
+pub use remote::{Remote, list_remotes};
 pub use repo::Repo;
 #[cfg(test)]
 pub use runner::run;

@@ -13,6 +13,8 @@ credential helpers, etc.).
 - Columna con la rama de cada commit: la punta de cada rama siempre visible y, al pasar el ratón, la rama
   de los commits anteriores (más transparente). Se deduce siguiendo el primer padre y los mensajes de merge.
 - Etiquetas de ramas, ramas remotas, tags y HEAD en cada commit.
+- Indicador de dónde está alojado el repositorio (GitHub, GitLab, otro servidor o solo local), deducido de
+  sus remotos.
 - Carga paginada del historial, pensada para repositorios grandes.
 - Detalles del commit: autor, committer, mensaje completo, padres y archivos cambiados.
 - Búsqueda de commits por mensaje, autor, correo o hash.
@@ -125,6 +127,7 @@ src/
 │   ├── details.rs       Detalles de un commit
 │   ├── diff.rs          Parser de diffs unificados
 │   ├── branch.rs        Listar, crear y cambiar de rama, checkout de commits
+│   ├── remote.rs        Remotos y servicio en el que están alojados
 │   ├── status.rs        Estado del working tree
 │   ├── worktree.rs      Diffs de cambios sin commitear
 │   └── commit.rs        Añadir/quitar del índice y crear commits

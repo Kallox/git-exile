@@ -41,6 +41,7 @@ pub enum RepoMessage {
     Ident(git::Result<String>),
     BranchCreated(git::Result<()>),
     Branches(git::Result<Vec<git::Branch>>),
+    Remotes(git::Result<Vec<git::Remote>>),
 }
 
 /// Lanza trabajos en el worker etiquetados con la pestaña que los pidió.
@@ -122,6 +123,8 @@ pub struct RepoTab {
     new_branch: Option<NewBranchDialog>,
     branches: Vec<git::Branch>,
     branch_filter: String,
+    /// `None` hasta la primera lectura; vacío si el repositorio está solo en local.
+    remotes: Option<Vec<git::Remote>>,
     /// Texto del buscador de commits.
     search: String,
     /// Resultado de la última búsqueda: (texto, commits revisados, índices).
@@ -154,6 +157,7 @@ impl RepoTab {
             new_branch: None,
             branches: Vec::new(),
             branch_filter: String::new(),
+            remotes: None,
             search: String::new(),
             search_cache: None,
         };
@@ -217,6 +221,8 @@ impl RepoTab {
         });
         let repo = self.repo.clone();
         jobs.spawn(move || RepoMessage::Branches(git::list_branches(&repo)));
+        let repo = self.repo.clone();
+        jobs.spawn(move || RepoMessage::Remotes(git::list_remotes(&repo)));
     }
 
     fn select(&mut self, row: ListRow, jobs: &mut Jobs) {
@@ -447,6 +453,10 @@ impl RepoTab {
                 Ok(branches) => self.branches = branches,
                 Err(e) => self.error = Some(format!("Error leyendo las ramas: {e}")),
             },
+            RepoMessage::Remotes(result) => match result {
+                Ok(remotes) => self.remotes = Some(remotes),
+                Err(e) => self.error = Some(format!("Error leyendo los remotos: {e}")),
+            },
             RepoMessage::Done(result) => {
                 if let Err(e) = result {
                     self.error = Some(e.to_string());
@@ -580,6 +590,9 @@ impl RepoTab {
                     .color(theme::TEXT),
             )
             .on_hover_text(self.repo.root().display().to_string());
+            if let Some(remotes) = &self.remotes {
+                hosting_chip(ui, remotes);
+            }
             self.branch_menu(ui, actions);
             if let Some(status) = &self.status
                 && let Some(upstream) = &status.upstream
@@ -960,6 +973,56 @@ fn branch_button(ui: &mut egui::Ui, branch: Option<&str>) -> egui::Response {
     resp
 }
 
+/// Dónde está alojado el repositorio: sus servicios, o "Local" si no tiene remotos.
+fn hosting_chip(ui: &mut egui::Ui, remotes: &[git::Remote]) {
+    let (icon, text, hint) = if remotes.is_empty() {
+        (
+            Icon::Folder,
+            "Local".to_owned(),
+            "Solo en este equipo: el repositorio no tiene remotos".to_owned(),
+        )
+    } else {
+        let hint: Vec<String> = remotes
+            .iter()
+            .map(|r| format!("{}: {}", r.name, r.url))
+            .collect();
+        (Icon::Cloud, hosting_text(remotes), hint.join("\n"))
+    };
+    egui::Frame::new()
+        .fill(theme::BG_INPUT)
+        .corner_radius(8)
+        .inner_margin(egui::Margin::symmetric(12, 0))
+        .show(ui, |ui| {
+            ui.set_height(34.0);
+            ui.horizontal_centered(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                icons::show(ui, icon, 14.0, theme::TEXT_SECONDARY);
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(text)
+                            .size(12.0)
+                            .color(theme::TEXT_SECONDARY),
+                    )
+                    .selectable(false),
+                );
+            });
+        })
+        .response
+        .on_hover_text(hint);
+}
+
+/// Servicios de los remotos, sin repetir, en el orden de la lista.
+fn hosting_text(remotes: &[git::Remote]) -> String {
+    let mut labels: Vec<&str> = Vec::new();
+    for remote in remotes {
+        let label = remote.hosting_label();
+        if !labels.contains(&label) {
+            labels.push(label);
+        }
+    }
+    labels.join(" · ")
+}
+
 /// Rama remota que se sigue, con commits por subir y por bajar.
 fn upstream_chip(ui: &mut egui::Ui, upstream: &str, ahead: u32, behind: u32) {
     egui::Frame::new()
@@ -1225,6 +1288,21 @@ mod tests {
             refs: Vec::new(),
             summary: summary.into(),
         }
+    }
+
+    #[test]
+    fn hosting_text_lists_each_service_once() {
+        let remote = |name: &str, hosting| git::Remote {
+            name: name.into(),
+            url: String::new(),
+            hosting,
+        };
+        let remotes = [
+            remote("origin", git::Hosting::GitHub),
+            remote("fork", git::Hosting::GitHub),
+            remote("copia", git::Hosting::GitLab),
+        ];
+        assert_eq!(hosting_text(&remotes), "GitHub · GitLab");
     }
 
     #[test]
