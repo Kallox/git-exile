@@ -20,7 +20,7 @@ fn main() -> eframe::Result<()> {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("git-exile")
             .with_inner_size([1200.0, 800.0])
-            .with_min_inner_size([600.0, 400.0]),
+            .with_min_inner_size([880.0, 400.0]),
         ..Default::default()
     };
 

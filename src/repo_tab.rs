@@ -686,7 +686,6 @@ impl RepoTab {
             {
                 upstream_chip(ui, upstream, status.ahead, status.behind);
             }
-            self.sync_buttons(ui, actions);
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let selected_commit = self.selected_commit();
@@ -712,6 +711,14 @@ impl RepoTab {
                 {
                     actions.push(Action::Refresh);
                 }
+            });
+        });
+        // En una sola fila el buscador tapaba los botones de la izquierda.
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 10.0;
+            self.sync_buttons(ui, actions);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let current = self.selected_commit();
                 let log_complete = self.log_complete;
                 let scanned = self.commits.len();
