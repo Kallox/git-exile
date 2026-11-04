@@ -202,3 +202,7 @@ cargo test
 ```
 
 Los tests del módulo `git` crean repositorios temporales y ejecutan git real sobre ellos.
+
+## Licencia
+
+Distribuido bajo la licencia MIT. Consulta el archivo `LICENSE`.

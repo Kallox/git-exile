@@ -42,11 +42,11 @@ jobs:
 
       - name: Empaquetar (Linux)
         if: runner.os == 'Linux'
-        run: tar -czf git-exile-${{ matrix.name }}.tar.gz -C target/release git-exile
+        run: tar -czf git-exile-${{ matrix.name }}.tar.gz LICENSE -C target/release git-exile
 
       - name: Empaquetar (Windows)
         if: runner.os == 'Windows'
-        run: Compress-Archive -Path target/release/git-exile.exe -DestinationPath git-exile-${{ matrix.name }}.zip
+        run: Compress-Archive -Path target/release/git-exile.exe, LICENSE -DestinationPath git-exile-${{ matrix.name }}.zip
 
       - uses: actions/upload-artifact@v4
         with:
