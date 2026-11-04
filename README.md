@@ -21,6 +21,8 @@ credential helpers, etc.).
 - Visor de diffs con números de línea y colores, en vista unificada o dividida (lado a lado). Soporta
   archivos nuevos, borrados, renombrados y binarios.
 - Vista de cambios sin commitear: archivos sin añadir, preparados para commit y en conflicto.
+- Descartar los cambios de un archivo, previa confirmación: deshace modificaciones, restaura borrados y
+  borra archivos nuevos.
 - Añadir y quitar archivos del índice, de uno en uno o todos a la vez.
 - Editor de commits con resumen, descripción y opción de amend.
 - Crear ramas a partir del commit seleccionado (por defecto HEAD), con opción de cambiar a ellas.
@@ -83,6 +85,17 @@ En el panel izquierdo están los repositorios abiertos y los recientes para abri
 
 Los cambios sin commitear se mantienen al cambiar de rama; si chocan con la rama de destino, git rechaza
 el cambio y se muestra su mensaje.
+
+### Descartar cambios
+
+El icono de la papelera de cada archivo descarta sus cambios, tras pedir confirmación; no se puede deshacer.
+
+- **En "Sin añadir"**: los archivos nuevos se borran del disco; los modificados y borrados vuelven a la
+  versión preparada para commit, o a la del último commit si no hay ninguna.
+- **En "Preparados para commit"**: el archivo vuelve a como está en el último commit, incluidos sus cambios
+  sin añadir. Los archivos nuevos se borran y los renombrados recuperan su nombre.
+
+Los archivos en conflicto no tienen esta opción. Otro repositorio git dentro de la carpeta tampoco se borra.
 
 ### Buscar commits
 

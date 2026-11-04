@@ -27,6 +27,7 @@ pub enum Icon {
     Home,
     ArrowUp,
     Check,
+    Trash,
 }
 
 /// Transforma coordenadas de la cuadrícula 24x24 al rectángulo destino.
@@ -141,6 +142,11 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32, width: f
                 egui::StrokeKind::Middle,
             );
             line(&[(5.0, 15.0), (5.0, 5.0), (6.0, 3.5), (15.0, 3.5)]);
+        }
+        Icon::Trash => {
+            line(&[(4.0, 6.0), (20.0, 6.0)]);
+            line(&[(6.0, 6.0), (7.0, 21.0), (17.0, 21.0), (18.0, 6.0)]);
+            line(&[(9.0, 6.0), (9.0, 3.0), (15.0, 3.0), (15.0, 6.0)]);
         }
         Icon::ChevronDown => line(&[(6.0, 9.0), (12.0, 15.0), (18.0, 9.0)]),
         Icon::ChevronUp => line(&[(6.0, 15.0), (12.0, 9.0), (18.0, 15.0)]),

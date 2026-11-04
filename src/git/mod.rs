@@ -19,7 +19,8 @@ pub(crate) mod testutil;
 
 pub use branch::{Branch, checkout_commit, create_branch, list_branches, switch_branch};
 pub use commit::{
-    author_ident, create_commit, last_commit_message, stage, stage_all, unstage, unstage_all,
+    author_ident, create_commit, discard, last_commit_message, stage, stage_all, unstage,
+    unstage_all,
 };
 pub use details::{CommitDetails, Person, load_commit};
 pub use diff::{DiffLine, FileDiff, FileStatus, Hunk, LineKind};

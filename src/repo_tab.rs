@@ -9,6 +9,7 @@ use crate::ui::commit_details::{self, DetailsAction};
 use crate::ui::commit_editor::{CommitEditor, EditorAction};
 use crate::ui::commit_list::{CommitList, ContextAction, ListRow};
 use crate::ui::diff_view;
+use crate::ui::discard_dialog::{DiscardAction, DiscardDialog};
 use crate::ui::icons::{self, ButtonStyle, Icon};
 use crate::ui::status_panel::{self, StatusAction, WtFile};
 use crate::ui::theme;
@@ -86,6 +87,10 @@ enum Action {
     CloseDialog,
     /// Cambiar a una rama local por nombre.
     SwitchTo(String),
+    /// Abrir la confirmación para descartar los cambios de un archivo.
+    AskDiscard(DiscardDialog),
+    CloseDiscard,
+    Discard,
     /// Mover HEAD a un commit (por hash), sin rama.
     CheckoutCommit(String),
     /// Ir al resultado de búsqueda siguiente (`forward`) o al anterior.
@@ -121,6 +126,7 @@ pub struct RepoTab {
     reselect: Option<String>,
     pub error: Option<String>,
     new_branch: Option<NewBranchDialog>,
+    discard: Option<DiscardDialog>,
     branches: Vec<git::Branch>,
     branch_filter: String,
     /// `None` hasta la primera lectura; vacío si el repositorio está solo en local.
@@ -155,6 +161,7 @@ impl RepoTab {
             reselect: None,
             error: None,
             new_branch: None,
+            discard: None,
             branches: Vec::new(),
             branch_filter: String::new(),
             remotes: None,
@@ -343,6 +350,13 @@ impl RepoTab {
                         None => repo.git(&["switch", &name]).map(drop),
                     }
                 });
+            }
+            Action::AskDiscard(dialog) => self.discard = Some(dialog),
+            Action::CloseDiscard => self.discard = None,
+            Action::Discard => {
+                if let Some(DiscardDialog { entry, staged }) = self.discard.take() {
+                    self.run_op(jobs, move |repo| git::discard(repo, &entry, staged));
+                }
             }
             Action::CheckoutCommit(id) => {
                 self.run_op(jobs, move |repo| git::checkout_commit(repo, &id));
@@ -573,6 +587,13 @@ impl RepoTab {
                     checkout,
                 }),
                 Some(DialogAction::Cancel) => actions.push(Action::CloseDialog),
+                None => {}
+            }
+        }
+        if let Some(dialog) = &self.discard {
+            match dialog.show(ui.ctx()) {
+                Some(DiscardAction::Confirm) => actions.push(Action::Discard),
+                Some(DiscardAction::Cancel) => actions.push(Action::CloseDiscard),
                 None => {}
             }
         }
@@ -890,6 +911,9 @@ impl RepoTab {
                         StatusAction::Unstage(paths) => Action::Unstage(paths),
                         StatusAction::StageAll => Action::StageAll,
                         StatusAction::UnstageAll => Action::UnstageAll,
+                        StatusAction::Discard { entry, staged } => {
+                            Action::AskDiscard(DiscardDialog { entry, staged })
+                        }
                     });
                 }
             });

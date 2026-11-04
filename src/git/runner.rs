@@ -15,6 +15,9 @@ pub enum GitError {
     },
     #[error("salida de git inesperada: {0}")]
     Parse(String),
+    /// Operación que no se intenta; el texto explica el motivo al usuario.
+    #[error("{0}")]
+    Refused(String),
 }
 
 pub type Result<T> = std::result::Result<T, GitError>;

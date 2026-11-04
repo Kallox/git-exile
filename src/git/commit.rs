@@ -1,7 +1,10 @@
 //! Operaciones que modifican el índice y crean commits.
 
+use std::path::Path;
+
 use super::repo::Repo;
-use super::runner::Result;
+use super::runner::{GitError, Result};
+use super::status::{ChangeKind, StatusEntry};
 
 /// Añade los archivos al índice (incluidos borrados y archivos nuevos).
 pub fn stage(repo: &Repo, paths: &[String]) -> Result<()> {
@@ -38,6 +41,50 @@ pub fn unstage_all(repo: &Repo) -> Result<()> {
             .map(drop)
     } else {
         repo.git(&["reset", "-q"]).map(drop)
+    }
+}
+
+/// Descarta los cambios de un archivo. Con `staged` (lista de preparados) lo deja
+/// como en HEAD, incluidos sus cambios sin añadir; sin él solo deshace lo que no
+/// está en el índice. Los archivos que HEAD no conoce se borran del disco.
+pub fn discard(repo: &Repo, entry: &StatusEntry, staged: bool) -> Result<()> {
+    // Las rutas son literales: un archivo llamado `*.txt` no debe afectar a otros.
+    let git = |args: &[&str]| {
+        let mut all = vec!["--literal-pathspecs"];
+        all.extend(args);
+        repo.git(&all).map(drop)
+    };
+    let path = entry.path.as_str();
+    let restore_from_head = ["restore", "--source=HEAD", "--staged", "--worktree", "--"];
+    match (entry.kind, staged) {
+        (ChangeKind::Untracked, _) if path.ends_with('/') => Err(GitError::Refused(format!(
+            "{path} es otro repositorio git: no se borra desde aquí"
+        ))),
+        (ChangeKind::Untracked, _) => {
+            git(&["clean", "-f", "-q", "--", path])?;
+            remove_empty_parents(repo.root(), path);
+            Ok(())
+        }
+        // Sin `staged`, `Added` es un `git add -N`: restaurarlo vaciaría el archivo.
+        (ChangeKind::Added, _) | (ChangeKind::Copied, true) => git(&["rm", "-f", "-q", "--", path]),
+        (ChangeKind::Renamed, true) => {
+            if let Some(orig) = &entry.orig_path {
+                git(&[&restore_from_head[..], &[orig.as_str()]].concat())?;
+            }
+            git(&["rm", "-f", "-q", "--", path])
+        }
+        (_, true) => git(&[&restore_from_head[..], &[path]].concat()),
+        (_, false) => git(&["restore", "--worktree", "--", path]),
+    }
+}
+
+/// Borra las carpetas que `git clean` deja vacías, como hace `git rm`.
+fn remove_empty_parents(root: &Path, path: &str) {
+    let parents = Path::new(path).ancestors().skip(1);
+    for dir in parents.take_while(|d| !d.as_os_str().is_empty()) {
+        if std::fs::remove_dir(root.join(dir)).is_err() {
+            break;
+        }
     }
 }
 
@@ -80,6 +127,151 @@ mod tests {
 
     fn status(t: &TestRepo) -> WorkingTreeStatus {
         load_status(&Repo::open(t.path()).unwrap()).unwrap()
+    }
+
+    fn read(t: &TestRepo, name: &str) -> Option<String> {
+        std::fs::read_to_string(t.path().join(name)).ok()
+    }
+
+    /// Descarta la única entrada de la lista indicada.
+    fn discard_only(t: &TestRepo, staged: bool) {
+        let s = status(t);
+        let list = if staged { &s.staged } else { &s.unstaged };
+        assert_eq!(list.len(), 1, "{list:?}");
+        discard(&Repo::open(t.path()).unwrap(), &list[0], staged).unwrap();
+    }
+
+    #[test]
+    fn discards_unstaged_changes() {
+        let t = TestRepo::new();
+        t.commit_file("mod.txt", "1\n", "first");
+        t.commit_file("del.txt", "1\n", "second");
+
+        t.write("mod.txt", "2\n");
+        discard_only(&t, false);
+        assert_eq!(read(&t, "mod.txt").as_deref(), Some("1\n"));
+
+        std::fs::remove_file(t.path().join("del.txt")).unwrap();
+        discard_only(&t, false);
+        assert_eq!(read(&t, "del.txt").as_deref(), Some("1\n"));
+
+        t.write("dir/sub/new.txt", "x\n");
+        discard_only(&t, false);
+        assert!(!t.path().join("dir").exists());
+        assert!(status(&t).is_clean());
+    }
+
+    #[test]
+    fn discarding_unstaged_keeps_the_staged_version() {
+        let t = TestRepo::new();
+        t.commit_file("a.txt", "1\n", "first");
+        t.write("a.txt", "2\n");
+        t.git(&["add", "a.txt"]);
+        t.write("a.txt", "3\n");
+
+        discard_only(&t, false);
+        assert_eq!(read(&t, "a.txt").as_deref(), Some("2\n"));
+        assert_eq!(status(&t).staged.len(), 1);
+    }
+
+    #[test]
+    fn discards_staged_changes_back_to_head() {
+        let t = TestRepo::new();
+        t.commit_file("a.txt", "1\n", "first");
+        t.commit_file("b.txt", "1\n", "second");
+
+        // Modificado, añadido y vuelto a modificar.
+        t.write("a.txt", "2\n");
+        t.git(&["add", "a.txt"]);
+        t.write("a.txt", "3\n");
+        discard_only(&t, true);
+        assert_eq!(read(&t, "a.txt").as_deref(), Some("1\n"));
+        assert!(status(&t).is_clean());
+
+        // Borrado.
+        t.git(&["rm", "-q", "a.txt"]);
+        discard_only(&t, true);
+        assert_eq!(read(&t, "a.txt").as_deref(), Some("1\n"));
+
+        // Nuevo, añadido y borrado del disco después.
+        t.write("new.txt", "x\n");
+        t.git(&["add", "new.txt"]);
+        std::fs::remove_file(t.path().join("new.txt")).unwrap();
+        discard_only(&t, true);
+        assert!(status(&t).is_clean());
+
+        // Renombrado.
+        t.git(&["mv", "b.txt", "c.txt"]);
+        discard_only(&t, true);
+        assert_eq!(read(&t, "b.txt").as_deref(), Some("1\n"));
+        assert_eq!(read(&t, "c.txt"), None);
+        assert!(status(&t).is_clean());
+    }
+
+    #[test]
+    fn discards_new_file_in_repo_without_commits() {
+        let t = TestRepo::new();
+        t.write("a.txt", "1\n");
+        t.git(&["add", "a.txt"]);
+        discard_only(&t, true);
+        assert_eq!(read(&t, "a.txt"), None);
+        assert!(status(&t).is_clean());
+    }
+
+    #[test]
+    fn discarding_intent_to_add_removes_the_file() {
+        let t = TestRepo::new();
+        t.commit_file("a.txt", "1\n", "first");
+        t.write("new.txt", "x\n");
+        t.git(&["add", "-N", "new.txt"]);
+        discard_only(&t, false);
+        assert_eq!(read(&t, "new.txt"), None);
+        assert!(status(&t).is_clean());
+    }
+
+    #[test]
+    fn discard_treats_paths_literally() {
+        let t = TestRepo::new();
+        t.commit_file("a.txt", "1\n", "first");
+        t.commit_file("*.txt", "1\n", "second");
+        t.write("a.txt", "2\n");
+        t.write("*.txt", "2\n");
+        t.write("[n]ew.bin", "x\n");
+        t.write("new.bin", "x\n");
+        let repo = Repo::open(t.path()).unwrap();
+        let entry = |path: &str, kind| StatusEntry {
+            path: path.into(),
+            orig_path: None,
+            kind,
+        };
+
+        discard(&repo, &entry("*.txt", ChangeKind::Modified), false).unwrap();
+        assert_eq!(read(&t, "*.txt").as_deref(), Some("1\n"));
+        assert_eq!(read(&t, "a.txt").as_deref(), Some("2\n"));
+
+        discard(&repo, &entry("[n]ew.bin", ChangeKind::Untracked), false).unwrap();
+        assert_eq!(read(&t, "[n]ew.bin"), None);
+        assert_eq!(read(&t, "new.bin").as_deref(), Some("x\n"));
+    }
+
+    #[test]
+    fn refuses_to_discard_nested_repository() {
+        let t = TestRepo::new();
+        t.commit_file("a.txt", "1\n", "first");
+        let nested = TestRepo::new();
+        nested.commit_file("f.txt", "1\n", "first");
+        let dest = t.path().join("sub");
+        crate::git::run(
+            t.path(),
+            &["clone", "-q", &nested.path().display().to_string(), "sub"],
+        )
+        .unwrap();
+
+        let s = status(&t);
+        assert_eq!(s.unstaged[0].path, "sub/");
+        let repo = Repo::open(t.path()).unwrap();
+        assert!(discard(&repo, &s.unstaged[0], false).is_err());
+        assert!(dest.join("f.txt").exists());
     }
 
     #[test]

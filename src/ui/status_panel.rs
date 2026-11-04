@@ -3,11 +3,14 @@
 use eframe::egui::{self, Color32, Rect, RichText, ScrollArea, Ui, vec2};
 
 use super::commit_details::{Trailing, file_row};
+use super::icons::{self, Icon};
 use super::theme;
 use crate::git::{ChangeKind, StatusEntry, WorkingTreeStatus};
 
 /// Ancho reservado a la derecha de cada fila para su botón.
 const BUTTON_SPACE: f32 = 86.0;
+/// Hueco del botón de descartar, a la izquierda del anterior.
+const DISCARD_SPACE: f32 = 28.0;
 
 /// Archivo seleccionado en la vista de cambios.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,6 +54,11 @@ pub enum StatusAction {
     Unstage(Vec<String>),
     StageAll,
     UnstageAll,
+    /// Pedir confirmación para descartar los cambios de un archivo.
+    Discard {
+        entry: StatusEntry,
+        staged: bool,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -161,7 +169,7 @@ fn section(
             entry.kind.letter(),
             kind_color(entry.kind),
             &label,
-            Trailing::Space(BUTTON_SPACE),
+            Trailing::Space(BUTTON_SPACE + DISCARD_SPACE),
             selected == Some(&file),
         )
         .on_hover_text("Doble clic para moverlo de lista");
@@ -184,7 +192,27 @@ fn section(
             )
             .on_hover_text(hint);
 
-        if button.clicked() || resp.double_clicked() {
+        // En un conflicto no hay un único estado al que volver.
+        let discard = kind != Section::Conflicted
+            && ui
+                .put(
+                    Rect::from_center_size(
+                        egui::pos2(button_rect.left() - DISCARD_SPACE / 2.0, rect.center().y),
+                        vec2(24.0, 24.0),
+                    ),
+                    |ui: &mut Ui| {
+                        icons::icon_button(ui, Icon::Trash, 24.0, 14.0, theme::TEXT_MUTED)
+                    },
+                )
+                .on_hover_text("Descartar los cambios…")
+                .clicked();
+
+        if discard {
+            *action = Some(StatusAction::Discard {
+                entry: entry.clone(),
+                staged,
+            });
+        } else if button.clicked() || resp.double_clicked() {
             *action = Some(toggle());
         } else if resp.clicked() {
             *action = Some(StatusAction::Select(file.clone()));
