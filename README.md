@@ -18,7 +18,8 @@ credential helpers, etc.).
 - Carga paginada del historial, pensada para repositorios grandes.
 - Detalles del commit: autor, committer, mensaje completo, padres y archivos cambiados.
 - Búsqueda de commits por mensaje, autor, correo o hash.
-- Tres temas oscuros a elegir desde el menú "Opciones": Violeta, Bosque y Brasa. La elección se recuerda.
+- Cuatro temas oscuros a elegir desde el menú "Opciones": Violeta, Bosque, Brasa y Exilio. La elección se
+  recuerda.
 - Visor de diffs con números de línea y colores, en vista unificada o dividida (lado a lado). Soporta
   archivos nuevos, borrados, renombrados y binarios.
 - Vista de cambios sin commitear: archivos sin añadir, preparados para commit y en conflicto.

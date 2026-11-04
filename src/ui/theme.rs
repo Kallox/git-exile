@@ -141,15 +141,49 @@ const EMBER: Palette = Palette {
     blue: Color32::from_rgb(0x8A, 0xA8, 0xF0),
 };
 
+/// Piedra oscura y oro envejecido, con los colores de rareza de un ARPG.
+const EXILE: Palette = Palette {
+    bg_tabs: Color32::from_rgb(0x0A, 0x09, 0x08),
+    bg_code: Color32::from_rgb(0x0B, 0x0A, 0x08),
+    bg: Color32::from_rgb(0x0F, 0x0D, 0x0B),
+    bg_card: Color32::from_rgb(0x1A, 0x16, 0x12),
+    bg_input: Color32::from_rgb(0x1E, 0x19, 0x14),
+    bg_button: Color32::from_rgb(0x21, 0x1B, 0x15),
+    bg_active: Color32::from_rgb(0x2E, 0x26, 0x1D),
+    border: Color32::from_rgb(0x2A, 0x22, 0x19),
+    border_soft: Color32::from_rgb(0x22, 0x1C, 0x15),
+    border_strong: Color32::from_rgb(0x3A, 0x2F, 0x22),
+    border_button: Color32::from_rgb(0x4A, 0x3B, 0x28),
+    border_badge: Color32::from_rgb(0x5A, 0x48, 0x30),
+    text: Color32::from_rgb(0xC8, 0xC8, 0xC8),
+    text_strong: Color32::from_rgb(0xF0, 0xE6, 0xD2),
+    text_soft: Color32::from_rgb(0xBD, 0xB5, 0xA5),
+    text_secondary: Color32::from_rgb(0xB2, 0xA9, 0x95),
+    text_date: Color32::from_rgb(0xAD, 0xA2, 0x8B),
+    text_muted: Color32::from_rgb(0xAA, 0x9E, 0x82),
+    text_faint: Color32::from_rgb(0x7D, 0x73, 0x5E),
+    text_on_accent: Color32::from_rgb(0x1A, 0x12, 0x09),
+    accent: Color32::from_rgb(0xC8, 0xAA, 0x6E),
+    link: Color32::from_rgb(0xE2, 0xCB, 0x9A),
+    green: Color32::from_rgb(0x5F, 0xD0, 0x68),
+    red: Color32::from_rgb(0xE0, 0x50, 0x50),
+    yellow: Color32::from_rgb(0xE8, 0xE0, 0x70),
+    teal: Color32::from_rgb(0x1B, 0xA2, 0x9B),
+    orange: Color32::from_rgb(0xD0, 0x7A, 0x35),
+    orange_text: Color32::from_rgb(0xE8, 0xA8, 0x78),
+    blue: Color32::from_rgb(0x88, 0x88, 0xFF),
+};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Theme {
     Violet,
     Forest,
     Ember,
+    Exile,
 }
 
 impl Theme {
-    pub const ALL: [Self; 3] = [Self::Violet, Self::Forest, Self::Ember];
+    pub const ALL: [Self; 4] = [Self::Violet, Self::Forest, Self::Ember, Self::Exile];
 
     /// Nombre para mostrar.
     pub fn name(self) -> &'static str {
@@ -157,6 +191,7 @@ impl Theme {
             Self::Violet => "Violeta",
             Self::Forest => "Bosque",
             Self::Ember => "Brasa",
+            Self::Exile => "Exilio",
         }
     }
 
@@ -166,6 +201,7 @@ impl Theme {
             Self::Violet => "violet",
             Self::Forest => "forest",
             Self::Ember => "ember",
+            Self::Exile => "exile",
         }
     }
 
@@ -178,6 +214,7 @@ impl Theme {
             Self::Violet => &VIOLET,
             Self::Forest => &FOREST,
             Self::Ember => &EMBER,
+            Self::Exile => &EXILE,
         }
     }
 }
