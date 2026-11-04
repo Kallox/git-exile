@@ -84,9 +84,13 @@ el cambio y se muestra su mensaje.
 
 ### Buscar commits
 
-El campo "Buscar commit, autor o hash…" de la barra del repositorio (Ctrl+F) filtra la lista de commits.
-Mientras hay una búsqueda se oculta el grafo y se sigue cargando el historial hasta revisarlo entero.
-Escape vacía la búsqueda.
+El campo "Buscar commit, autor o hash…" de la barra del repositorio (Ctrl+F) resalta los commits que
+coinciden: el resto se atenúa, pero sigue en su sitio con el grafo para no perder el contexto. Mientras hay
+una búsqueda se sigue cargando el historial hasta revisarlo entero.
+
+El propio campo muestra el contador de resultados y las flechas para recorrerlos, que seleccionan cada
+commit y dan la vuelta al llegar a un extremo. Con el foco en el buscador, Enter va al siguiente y
+Mayús+Enter al anterior. Escape o la "x" vacían la búsqueda.
 
 ## Atajos de teclado
 

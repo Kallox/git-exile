@@ -22,6 +22,7 @@ pub enum Icon {
     Refresh,
     Copy,
     ChevronDown,
+    ChevronUp,
     Merge,
     Home,
     ArrowUp,
@@ -142,6 +143,7 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32, width: f
             line(&[(5.0, 15.0), (5.0, 5.0), (6.0, 3.5), (15.0, 3.5)]);
         }
         Icon::ChevronDown => line(&[(6.0, 9.0), (12.0, 15.0), (18.0, 9.0)]),
+        Icon::ChevronUp => line(&[(6.0, 15.0), (12.0, 9.0), (18.0, 15.0)]),
         Icon::Merge => {
             circle(6.0, 5.0, 2.0);
             circle(6.0, 19.0, 2.0);

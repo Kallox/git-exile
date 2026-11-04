@@ -15,6 +15,8 @@ use crate::ui::theme;
 use crate::worker::Worker;
 
 const LOG_PAGE: usize = 500;
+/// Ancho fijo del buscador: el contador y las flechas van dentro y no mueven nada.
+const SEARCH_WIDTH: f32 = 340.0;
 
 /// Resultado de un trabajo en segundo plano de una pestaña.
 pub enum RepoMessage {
@@ -85,6 +87,10 @@ enum Action {
     SwitchTo(String),
     /// Mover HEAD a un commit (por hash), sin rama.
     CheckoutCommit(String),
+    /// Ir al resultado de búsqueda siguiente (`forward`) o al anterior.
+    StepMatch {
+        forward: bool,
+    },
 }
 
 pub struct RepoTab {
@@ -163,6 +169,13 @@ impl RepoTab {
         self.repo.name()
     }
 
+    fn selected_commit(&self) -> Option<usize> {
+        match self.selected {
+            Some(ListRow::Commit(i)) => Some(i),
+            _ => None,
+        }
+    }
+
     fn has_changes(&self) -> bool {
         self.status.as_ref().is_some_and(|s| !s.is_clean())
     }
@@ -190,6 +203,7 @@ impl RepoTab {
             self.selected = None;
         }
         self.commits.clear();
+        self.search_cache = None;
         self.load_log_page(jobs);
     }
 
@@ -326,6 +340,16 @@ impl RepoTab {
             }
             Action::CheckoutCommit(id) => {
                 self.run_op(jobs, move |repo| git::checkout_commit(repo, &id));
+            }
+            Action::StepMatch { forward } => {
+                let current = self.selected_commit();
+                let target = self
+                    .search_results()
+                    .and_then(|found| step_match(found, current, forward));
+                if let Some(i) = target {
+                    self.list.scroll_to(ListRow::Commit(i));
+                    self.select(ListRow::Commit(i), jobs);
+                }
             }
             Action::SelectId(id) => {
                 if let Some(i) = self.commits.iter().position(|c| c.id == id) {
@@ -564,10 +588,7 @@ impl RepoTab {
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let selected_commit = match self.selected {
-                    Some(ListRow::Commit(i)) => Some(i),
-                    _ => None,
-                };
+                let selected_commit = self.selected_commit();
                 let hint = match selected_commit.and_then(|i| self.commits.get(i)) {
                     Some(c) => format!("Crear una rama en el commit {}", c.short_id),
                     None => "Crear una rama en HEAD (el último commit)".to_owned(),
@@ -590,7 +611,17 @@ impl RepoTab {
                 {
                     actions.push(Action::Refresh);
                 }
-                search_box(ui, &mut self.search);
+                let current = self.selected_commit();
+                let log_complete = self.log_complete;
+                let scanned = self.commits.len();
+                let results = self.search_results().map(|found| SearchResults {
+                    text: results_text(found, current),
+                    any: !found.is_empty(),
+                    scanned: (!log_complete).then_some(scanned),
+                });
+                if let Some(forward) = search_box(ui, &mut self.search, results.as_ref()) {
+                    actions.push(Action::StepMatch { forward });
+                }
             });
         });
     }
@@ -734,33 +765,15 @@ impl RepoTab {
                 let changes = self
                     .status
                     .as_ref()
-                    .filter(|s| !s.is_clean() && !searching)
+                    .filter(|s| !s.is_clean())
                     .map(|s| s.change_count());
                 if self.commits.is_empty() && changes.is_none() && !self.log_loading && !searching {
                     ui.weak("Este repositorio todavía no tiene commits.");
                 }
-                let log_complete = self.log_complete;
-                let loaded = self.commits.len();
-                let visible = self.search_results().map(<[usize]>::to_vec);
-                if let Some(found) = &visible {
-                    egui::Frame::new()
-                        .inner_margin(egui::Margin::symmetric(20, 6))
-                        .show(ui, |ui| {
-                            let mut text = match found.len() {
-                                1 => "1 commit encontrado".to_owned(),
-                                n => format!("{n} commits encontrados"),
-                            };
-                            if !log_complete {
-                                text.push_str(&format!(
-                                    " (buscando en el historial, {loaded} revisados…)"
-                                ));
-                            }
-                            ui.label(
-                                egui::RichText::new(text)
-                                    .size(12.0)
-                                    .color(theme::TEXT_MUTED),
-                            );
-                        });
+                let found = self.search_results().map(<[usize]>::to_vec);
+                // La lista ya no se acorta: hay que pedir el resto del historial.
+                if found.is_some() && !self.log_complete {
+                    actions.push(Action::LoadMore);
                 }
                 let resp = self.list.show(
                     ui,
@@ -768,7 +781,7 @@ impl RepoTab {
                     &self.graph,
                     self.selected,
                     changes,
-                    visible.as_deref(),
+                    found.as_deref(),
                 );
                 if let Some(row) = resp.selected {
                     actions.push(Action::Select(row));
@@ -998,9 +1011,50 @@ fn search_commits(commits: &[Commit], query: &str) -> Vec<usize> {
         .collect()
 }
 
-/// Campo de búsqueda de commits. Ctrl+F lo enfoca y Escape lo vacía.
-fn search_box(ui: &mut egui::Ui, text: &mut String) {
+/// Resultado siguiente o anterior a `current` en `found` (índices ordenados).
+/// Al llegar a un extremo da la vuelta; `current` no tiene por qué ser un resultado.
+fn step_match(found: &[usize], current: Option<usize>, forward: bool) -> Option<usize> {
+    if forward {
+        let next = current.map_or(0, |c| found.partition_point(|&i| i <= c));
+        found.get(next).or(found.first()).copied()
+    } else {
+        let end = current.map_or(found.len(), |c| found.partition_point(|&i| i < c));
+        end.checked_sub(1)
+            .and_then(|i| found.get(i))
+            .or(found.last())
+            .copied()
+    }
+}
+
+/// Texto del contador: la posición si el commit `current` es un resultado.
+fn results_text(found: &[usize], current: Option<usize>) -> String {
+    let total = found.len();
+    match (current.and_then(|c| found.binary_search(&c).ok()), total) {
+        (Some(pos), _) => format!("{}/{total}", pos + 1),
+        (None, 0) => "Sin resultados".to_owned(),
+        (None, 1) => "1 resultado".to_owned(),
+        (None, _) => format!("{total} resultados"),
+    }
+}
+
+/// Lo que el buscador muestra de la búsqueda en curso.
+struct SearchResults {
+    text: String,
+    any: bool,
+    /// Commits revisados, si todavía falta historial por cargar.
+    scanned: Option<usize>,
+}
+
+/// Campo de búsqueda de commits, con contador y navegación integrados.
+/// Ctrl+F lo enfoca, Escape lo vacía y Enter (o las flechas) devuelve el sentido
+/// en que moverse por los resultados (`true` hacia abajo).
+fn search_box(
+    ui: &mut egui::Ui,
+    text: &mut String,
+    results: Option<&SearchResults>,
+) -> Option<bool> {
     let id = egui::Id::new("commit_search");
+    let mut step = None;
     if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::F)) {
         ui.memory_mut(|m| m.request_focus(id));
     }
@@ -1010,9 +1064,12 @@ fn search_box(ui: &mut egui::Ui, text: &mut String) {
         .corner_radius(8)
         .inner_margin(egui::Margin::symmetric(12, 0))
         .show(ui, |ui| {
-            ui.set_width(236.0);
+            ui.set_width(SEARCH_WIDTH);
             ui.set_height(32.0);
-            // El padre es de derecha a izquierda: aquí se fuerza el orden normal.
+            // El padre es de derecha a izquierda: los controles van primero.
+            if let Some(results) = results {
+                search_controls(ui, text, results, id, &mut step);
+            }
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 icons::show(ui, Icon::Search, 14.0, theme::TEXT_MUTED);
                 let edit = ui.add(
@@ -1020,15 +1077,75 @@ fn search_box(ui: &mut egui::Ui, text: &mut String) {
                         .id(id)
                         .frame(false)
                         .hint_text("Buscar commit, autor o hash…")
-                        .desired_width(f32::INFINITY),
+                        .desired_width(f32::INFINITY)
+                        // Enter navega por los resultados sin perder el foco.
+                        .return_key(None),
                 );
+                if edit.has_focus() {
+                    ui.input(|i| {
+                        if i.key_pressed(egui::Key::Enter) {
+                            step = Some(!i.modifiers.shift);
+                        }
+                    });
+                }
                 if edit.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                     text.clear();
                     edit.surrender_focus();
                 }
-                edit.on_hover_text("Buscar en mensajes, autores y hashes (Ctrl+F)");
+                edit.on_hover_text(
+                    "Buscar en mensajes, autores y hashes (Ctrl+F). \
+                     Enter y Mayús+Enter recorren los resultados.",
+                );
             });
         });
+    step
+}
+
+/// Contador, flechas y botón de limpiar, de derecha a izquierda.
+fn search_controls(
+    ui: &mut egui::Ui,
+    text: &mut String,
+    results: &SearchResults,
+    id: egui::Id,
+    step: &mut Option<bool>,
+) {
+    ui.spacing_mut().item_spacing.x = 2.0;
+    if icons::icon_button(ui, Icon::Close, 24.0, 12.0, theme::TEXT_MUTED)
+        .on_hover_text("Limpiar la búsqueda (Escape)")
+        .clicked()
+    {
+        text.clear();
+        ui.memory_mut(|m| m.request_focus(id));
+    }
+    ui.add_enabled_ui(results.any, |ui| {
+        let mut arrow = |icon, hint: &str, forward: bool| {
+            let clicked = icons::icon_button(ui, icon, 24.0, 14.0, theme::TEXT_SECONDARY)
+                .on_hover_text(hint)
+                .clicked();
+            if clicked {
+                *step = Some(forward);
+                // El foco sigue en el campo para poder continuar con Enter.
+                ui.memory_mut(|m| m.request_focus(id));
+            }
+        };
+        // De derecha a izquierda: la de abajo se coloca primero.
+        arrow(Icon::ChevronDown, "Resultado siguiente (Enter)", true);
+        arrow(Icon::ChevronUp, "Resultado anterior (Mayús+Enter)", false);
+    });
+    ui.add_space(6.0);
+    let dots = if results.scanned.is_some() { "…" } else { "" };
+    let label = ui.add(
+        egui::Label::new(
+            egui::RichText::new(format!("{}{dots}", results.text))
+                .size(12.0)
+                .color(theme::TEXT_MUTED),
+        )
+        .selectable(false),
+    );
+    if let Some(scanned) = results.scanned {
+        label.on_hover_text(format!("Buscando en el historial, {scanned} revisados…"));
+    }
+    ui.add_space(6.0);
 }
 
 /// Fila del menú de ramas: icono, nombre y marca de la actual.
@@ -1108,6 +1225,33 @@ mod tests {
             refs: Vec::new(),
             summary: summary.into(),
         }
+    }
+
+    #[test]
+    fn steps_through_matches_wrapping_around() {
+        let found = [2, 5, 9];
+        assert_eq!(step_match(&found, None, true), Some(2));
+        assert_eq!(step_match(&found, None, false), Some(9));
+        assert_eq!(step_match(&found, Some(2), true), Some(5));
+        assert_eq!(step_match(&found, Some(5), false), Some(2));
+        // Da la vuelta en los extremos.
+        assert_eq!(step_match(&found, Some(9), true), Some(2));
+        assert_eq!(step_match(&found, Some(2), false), Some(9));
+        // Desde un commit que no es resultado, el más cercano en ese sentido.
+        assert_eq!(step_match(&found, Some(6), true), Some(9));
+        assert_eq!(step_match(&found, Some(6), false), Some(5));
+        assert_eq!(step_match(&[], Some(1), true), None);
+        assert_eq!(step_match(&[], None, false), None);
+    }
+
+    #[test]
+    fn counts_results_with_position_of_selected_commit() {
+        let found = [2, 5, 9];
+        assert_eq!(results_text(&found, Some(5)), "2/3");
+        assert_eq!(results_text(&found, Some(3)), "3 resultados");
+        assert_eq!(results_text(&found, None), "3 resultados");
+        assert_eq!(results_text(&[4], None), "1 resultado");
+        assert_eq!(results_text(&[], None), "Sin resultados");
     }
 
     #[test]

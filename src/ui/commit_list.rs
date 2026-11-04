@@ -17,6 +17,8 @@ const GAP: f32 = 6.0;
 const BRANCH_WIDTH: f32 = 150.0;
 /// Opacidad de la rama de un commit que no es la punta (solo al pasar el ratón).
 const INHERITED_OPACITY: f32 = 0.4;
+/// Opacidad de las filas que no coinciden con la búsqueda.
+const DIMMED_OPACITY: f32 = 0.3;
 /// Cuántas filas antes del final se pide la siguiente página.
 const PREFETCH_ROWS: usize = 100;
 
@@ -53,41 +55,28 @@ pub struct ListResponse {
 
 /// Convierte entre filas lógicas y posiciones en pantalla.
 #[derive(Clone, Copy)]
-struct Layout<'a> {
+struct Layout {
     worktree: bool,
     commits: usize,
-    /// Si hay un filtro, los índices de los commits visibles.
-    visible: Option<&'a [usize]>,
 }
 
-impl Layout<'_> {
-    fn commit_rows(self) -> usize {
-        self.visible.map_or(self.commits, <[usize]>::len)
-    }
-
+impl Layout {
     fn len(self) -> usize {
-        self.commit_rows() + self.worktree as usize
+        self.commits + self.worktree as usize
     }
 
     fn row(self, index: usize) -> ListRow {
-        let commit = |i: usize| ListRow::Commit(self.visible.map_or(i, |v| v[i]));
         match (self.worktree, index) {
             (true, 0) => ListRow::WorkingTree,
-            (true, i) => commit(i - 1),
-            (false, i) => commit(i),
+            (true, i) => ListRow::Commit(i - 1),
+            (false, i) => ListRow::Commit(i),
         }
     }
 
     fn index(self, row: ListRow) -> Option<usize> {
         match row {
             ListRow::WorkingTree => self.worktree.then_some(0),
-            ListRow::Commit(i) => {
-                let pos = match self.visible {
-                    Some(v) => v.iter().position(|&x| x == i)?,
-                    None => i,
-                };
-                Some(pos + self.worktree as usize)
-            }
+            ListRow::Commit(i) => Some(i + self.worktree as usize),
         }
     }
 }
@@ -126,7 +115,7 @@ impl CommitList {
 
     /// Dibuja la lista. `worktree_changes` es el número de archivos con cambios
     /// sin commitear; si es `Some`, se añade una fila para ellos arriba.
-    /// Con `visible` solo se muestran esos commits (búsqueda) y no se dibuja el grafo.
+    /// Con `matches` (índices ordenados, de una búsqueda) el resto de filas se atenúa.
     pub fn show(
         &mut self,
         ui: &mut Ui,
@@ -134,12 +123,11 @@ impl CommitList {
         graph: &Graph,
         selected: Option<ListRow>,
         worktree_changes: Option<usize>,
-        visible: Option<&[usize]>,
+        matches: Option<&[usize]>,
     ) -> ListResponse {
         let layout = Layout {
             worktree: worktree_changes.is_some(),
             commits: commits.len(),
-            visible,
         };
         let selected_index = selected.and_then(|r| layout.index(r));
         let mut response = ListResponse::default();
@@ -148,13 +136,8 @@ impl CommitList {
             self.scroll_to = Some(layout.row(new));
         }
 
-        let show_graph = visible.is_none();
-        let graph_width = if show_graph {
-            graph_view::width(graph.max_width()).max(MIN_GRAPH_WIDTH)
-        } else {
-            20.0
-        };
-        header(ui, graph_width, show_graph);
+        let graph_width = graph_view::width(graph.max_width()).max(MIN_GRAPH_WIDTH);
+        header(ui, graph_width);
 
         let mut area = ScrollArea::vertical().auto_shrink(false);
         if let Some(row) = self.scroll_to.take().and_then(|r| layout.index(r)) {
@@ -177,6 +160,15 @@ impl CommitList {
                     ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
                 let row = layout.row(index);
                 let is_selected = response.selected.or(selected) == Some(row);
+                let matched = match (matches, row) {
+                    (None, _) => true,
+                    (Some(m), ListRow::Commit(i)) => m.binary_search(&i).is_ok(),
+                    (Some(_), ListRow::WorkingTree) => false,
+                };
+                let opacity = ui.opacity();
+                if !matched && !is_selected {
+                    ui.multiply_opacity(DIMMED_OPACITY);
+                }
                 match row {
                     ListRow::WorkingTree => paint_worktree_row(
                         ui,
@@ -190,7 +182,7 @@ impl CommitList {
                         ui,
                         rect,
                         &commits[i],
-                        graph.rows.get(i).filter(|_| show_graph),
+                        graph.rows.get(i),
                         graph_width,
                         is_selected,
                         resp.hovered(),
@@ -201,6 +193,7 @@ impl CommitList {
                 {
                     paint_branch_cell(ui, rect, graph_row, graph_width, resp.hovered());
                 }
+                ui.set_opacity(opacity);
                 if resp.clicked() {
                     response.selected = Some(row);
                 }
@@ -273,7 +266,7 @@ impl CommitList {
 }
 
 /// Cabecera con los nombres de las columnas.
-fn header(ui: &mut Ui, graph_width: f32, show_graph: bool) {
+fn header(ui: &mut Ui, graph_width: f32) {
     let (rect, _) =
         ui.allocate_exact_size(vec2(ui.available_width(), HEADER_HEIGHT), Sense::hover());
     let painter = ui.painter();
@@ -295,9 +288,7 @@ fn header(ui: &mut Ui, graph_width: f32, show_graph: bool) {
         );
     };
     text(cols.branch + 16.0, "RAMA");
-    if show_graph {
-        text(cols.graph + 20.0, "GRAFO");
-    }
+    text(cols.graph + 20.0, "GRAFO");
     text(cols.desc, "DESCRIPCIÓN");
     text(cols.author, "AUTOR");
     text(cols.date, "FECHA");
