@@ -4,6 +4,7 @@ pub mod branch_dialog;
 pub mod commit_details;
 pub mod commit_editor;
 pub mod commit_list;
+pub mod connect_remote_dialog;
 pub mod diff_view;
 pub mod discard_dialog;
 pub mod graph_view;

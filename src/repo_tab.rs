@@ -8,6 +8,7 @@ use crate::ui::branch_dialog::{DialogAction, NewBranchDialog};
 use crate::ui::commit_details::{self, DetailsAction};
 use crate::ui::commit_editor::{CommitEditor, EditorAction};
 use crate::ui::commit_list::{CommitList, ContextAction, ListRow};
+use crate::ui::connect_remote_dialog::{ConnectAction, ConnectRemoteDialog};
 use crate::ui::diff_view;
 use crate::ui::discard_dialog::{DiscardAction, DiscardDialog};
 use crate::ui::icons::{self, ButtonStyle, Icon};
@@ -43,11 +44,15 @@ pub enum RepoMessage {
     BranchCreated(git::Result<()>),
     Branches(git::Result<Vec<git::Branch>>),
     Remotes(git::Result<Vec<git::Remote>>),
+    Synced(git::Result<()>),
+    RemoteConnected(git::Result<()>),
 }
 
 /// Lanza trabajos en el worker etiquetados con la pestaña que los pidió.
 pub struct Jobs<'a> {
     pub worker: &'a mut Worker<Message>,
+    /// Trabajos de red: pueden tardar, y no deben frenar las lecturas locales.
+    pub network: &'a mut Worker<Message>,
     pub tab: u64,
 }
 
@@ -55,6 +60,14 @@ impl Jobs<'_> {
     fn spawn(&mut self, job: impl FnOnce() -> RepoMessage + Send + 'static) {
         let tab = self.tab;
         self.worker.spawn(move || Message {
+            tab,
+            kind: MessageKind::Repo(job()),
+        });
+    }
+
+    fn spawn_network(&mut self, job: impl FnOnce() -> RepoMessage + Send + 'static) {
+        let tab = self.tab;
+        self.network.spawn(move || Message {
             tab,
             kind: MessageKind::Repo(job()),
         });
@@ -91,6 +104,10 @@ enum Action {
     AskDiscard(DiscardDialog),
     CloseDiscard,
     Discard,
+    Sync(git::SyncOp),
+    OpenConnectRemote,
+    CloseConnectRemote,
+    ConnectRemote(String),
     /// Mover HEAD a un commit (por hash), sin rama.
     CheckoutCommit(String),
     /// Ir al resultado de búsqueda siguiente (`forward`) o al anterior.
@@ -131,6 +148,9 @@ pub struct RepoTab {
     branch_filter: String,
     /// `None` hasta la primera lectura; vacío si el repositorio está solo en local.
     remotes: Option<Vec<git::Remote>>,
+    /// Hay un fetch, pull o push en marcha.
+    syncing: bool,
+    connect_remote: Option<ConnectRemoteDialog>,
     /// Texto del buscador de commits.
     search: String,
     /// Resultado de la última búsqueda: (texto, commits revisados, índices).
@@ -165,6 +185,8 @@ impl RepoTab {
             branches: Vec::new(),
             branch_filter: String::new(),
             remotes: None,
+            syncing: false,
+            connect_remote: None,
             search: String::new(),
             search_cache: None,
         };
@@ -358,6 +380,22 @@ impl RepoTab {
                     self.run_op(jobs, move |repo| git::discard(repo, &entry, staged));
                 }
             }
+            Action::Sync(op) => {
+                self.syncing = true;
+                let repo = self.repo.clone();
+                jobs.spawn_network(move || RepoMessage::Synced(op.run(&repo)));
+            }
+            Action::OpenConnectRemote => {
+                self.connect_remote = Some(ConnectRemoteDialog::default());
+            }
+            Action::CloseConnectRemote => self.connect_remote = None,
+            Action::ConnectRemote(url) => {
+                if let Some(dialog) = &mut self.connect_remote {
+                    dialog.busy = true;
+                }
+                let repo = self.repo.clone();
+                jobs.spawn(move || RepoMessage::RemoteConnected(git::connect_remote(&repo, &url)));
+            }
             Action::CheckoutCommit(id) => {
                 self.run_op(jobs, move |repo| git::checkout_commit(repo, &id));
             }
@@ -466,6 +504,27 @@ impl RepoTab {
             RepoMessage::Branches(result) => match result {
                 Ok(branches) => self.branches = branches,
                 Err(e) => self.error = Some(format!("Error leyendo las ramas: {e}")),
+            },
+            RepoMessage::Synced(result) => {
+                self.syncing = false;
+                if let Err(e) = result {
+                    self.error = Some(e.to_string());
+                }
+                // Si llegó o se subió algo, las referencias cambian y se recarga el log.
+                self.refresh_status(jobs);
+            }
+            RepoMessage::RemoteConnected(result) => match result {
+                Ok(()) => {
+                    self.connect_remote = None;
+                    self.refresh_status(jobs);
+                }
+                Err(e) => match &mut self.connect_remote {
+                    Some(dialog) => {
+                        dialog.busy = false;
+                        dialog.error = Some(e.to_string());
+                    }
+                    None => self.error = Some(e.to_string()),
+                },
             },
             RepoMessage::Remotes(result) => match result {
                 Ok(remotes) => self.remotes = Some(remotes),
@@ -590,6 +649,13 @@ impl RepoTab {
                 None => {}
             }
         }
+        if let Some(dialog) = &mut self.connect_remote {
+            match dialog.show(ui.ctx()) {
+                Some(ConnectAction::Connect(url)) => actions.push(Action::ConnectRemote(url)),
+                Some(ConnectAction::Cancel) => actions.push(Action::CloseConnectRemote),
+                None => {}
+            }
+        }
         if let Some(dialog) = &self.discard {
             match dialog.show(ui.ctx()) {
                 Some(DiscardAction::Confirm) => actions.push(Action::Discard),
@@ -620,6 +686,7 @@ impl RepoTab {
             {
                 upstream_chip(ui, upstream, status.ahead, status.behind);
             }
+            self.sync_buttons(ui, actions);
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let selected_commit = self.selected_commit();
@@ -658,6 +725,69 @@ impl RepoTab {
                 }
             });
         });
+    }
+
+    /// Botones de fetch, pull y push, con el motivo cuando no se pueden usar.
+    fn sync_buttons(&self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+        let has_remote = self.remotes.as_ref().is_some_and(|r| !r.is_empty());
+        let has_upstream = self.status.as_ref().is_some_and(|s| s.upstream.is_some());
+        let on_branch = self.branch.is_some();
+        let no_remote = (!has_remote).then_some("El repositorio no tiene remotos");
+        let detached = (!on_branch).then_some("Con HEAD separado no hay rama");
+        let no_upstream =
+            (!has_upstream).then_some("La rama no sigue a ninguna remota: súbela con Push");
+
+        let buttons = [
+            (
+                "Fetch",
+                git::SyncOp::Fetch,
+                "Bajar las novedades de los remotos sin tocar tus ramas ni tus archivos",
+                no_remote,
+            ),
+            (
+                "Pull",
+                git::SyncOp::Pull,
+                "Traer los commits de la rama remota a la actual, si no hay que combinar nada",
+                no_remote.or(detached).or(no_upstream),
+            ),
+            (
+                "Push",
+                git::SyncOp::Push,
+                "Subir los commits de la rama actual. La primera vez crea la rama en el remoto",
+                no_remote.or(detached),
+            ),
+        ];
+        ui.spacing_mut().item_spacing.x = 4.0;
+        for (text, op, hint, blocked) in buttons {
+            let button = egui::Button::new(egui::RichText::new(text).size(12.0))
+                .corner_radius(8)
+                .min_size(egui::vec2(0.0, 34.0));
+            let resp = ui
+                .add_enabled(blocked.is_none() && !self.syncing, button)
+                .on_hover_text(hint)
+                .on_disabled_hover_text(blocked.unwrap_or("Hay otra operación en marcha"));
+            if resp.clicked() {
+                actions.push(Action::Sync(op));
+            }
+        }
+        if self.syncing {
+            ui.spinner();
+        }
+        // Antes de leer los remotos no se sabe si hace falta.
+        let unconnected = self.remotes.as_ref().is_some_and(Vec::is_empty);
+        if unconnected
+            && ui
+                .add(
+                    egui::Button::new(egui::RichText::new("Conectar remoto…").size(12.0))
+                        .corner_radius(8)
+                        .min_size(egui::vec2(0.0, 34.0)),
+                )
+                .on_hover_text("Conectar este repositorio local a GitHub, GitLab u otro servidor")
+                .clicked()
+        {
+            actions.push(Action::OpenConnectRemote);
+        }
+        ui.spacing_mut().item_spacing.x = 10.0;
     }
 
     /// Índices de los commits que coinciden con la búsqueda, o `None` sin búsqueda.

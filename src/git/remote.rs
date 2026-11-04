@@ -1,7 +1,7 @@
 //! Remotos del repositorio y servicio en el que están alojados.
 
 use super::repo::Repo;
-use super::runner::Result;
+use super::runner::{GitError, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Hosting {
@@ -37,6 +37,18 @@ pub fn list_remotes(repo: &Repo) -> Result<Vec<Remote>> {
     let mut remotes = parse_remotes(&repo.git(&["remote", "-v"])?);
     remotes.sort_by_key(|r| r.name != "origin");
     Ok(remotes)
+}
+
+/// Conecta el repositorio a `url` con el remoto `origin`.
+pub fn connect_remote(repo: &Repo, url: &str) -> Result<()> {
+    let url = url.trim();
+    // Git lo interpretaría como una opción al usar el remoto.
+    if url.is_empty() || url.starts_with('-') {
+        return Err(GitError::Refused(format!(
+            "\"{url}\" no es una dirección válida"
+        )));
+    }
+    repo.git(&["remote", "add", "--", "origin", url]).map(drop)
 }
 
 /// `git remote -v` da una línea `nombre\turl (fetch)` y otra `(push)` por remoto.
@@ -160,6 +172,35 @@ mod tests {
         assert_eq!(remotes[1].name, "parcial");
         assert_eq!(remotes[1].url, "https://gitlab.com/a/b");
         assert_eq!(remotes[1].hosting_label(), "GitLab");
+    }
+
+    #[test]
+    fn connects_origin_and_detects_its_hosting() {
+        let t = TestRepo::new();
+        t.commit_file("a.txt", "1\n", "first");
+        let repo = Repo::open(t.path()).unwrap();
+
+        connect_remote(&repo, "  git@github.com:a/b.git\n").unwrap();
+        let remotes = list_remotes(&repo).unwrap();
+        assert_eq!(remotes.len(), 1);
+        assert_eq!(remotes[0].name, "origin");
+        assert_eq!(remotes[0].url, "git@github.com:a/b.git");
+        assert_eq!(remotes[0].hosting, Hosting::GitHub);
+
+        // Ya existe: se mantiene el que había.
+        assert!(connect_remote(&repo, "https://gitlab.com/a/b.git").is_err());
+        assert_eq!(list_remotes(&repo).unwrap()[0].hosting, Hosting::GitHub);
+    }
+
+    #[test]
+    fn rejects_empty_and_option_like_urls() {
+        let t = TestRepo::new();
+        t.commit_file("a.txt", "1\n", "first");
+        let repo = Repo::open(t.path()).unwrap();
+        for bad in ["", "   ", "--upload-pack=x"] {
+            assert!(connect_remote(&repo, bad).is_err(), "{bad:?}");
+        }
+        assert!(list_remotes(&repo).unwrap().is_empty());
     }
 
     #[test]

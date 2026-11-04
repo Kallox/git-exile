@@ -64,6 +64,8 @@ impl Tab {
 
 pub struct GitExileApp {
     worker: Worker<Message>,
+    /// Hilo aparte para fetch, pull y push.
+    network: Worker<Message>,
     /// Si la ventana tenía el foco en el frame anterior.
     focused: bool,
     next_id: u64,
@@ -95,6 +97,7 @@ impl GitExileApp {
 
         let mut app = Self {
             worker: Worker::new(cc.egui_ctx.clone()),
+            network: Worker::new(cc.egui_ctx.clone()),
             focused: true,
             next_id: 0,
             tabs: Vec::new(),
@@ -120,6 +123,7 @@ impl GitExileApp {
     fn jobs(&mut self, tab: u64) -> Jobs<'_> {
         Jobs {
             worker: &mut self.worker,
+            network: &mut self.network,
             tab,
         }
     }
@@ -217,6 +221,7 @@ impl GitExileApp {
         if let TabContent::Repo(repo) = &mut tab.content {
             let mut jobs = Jobs {
                 worker: &mut self.worker,
+                network: &mut self.network,
                 tab: tab.id,
             };
             repo.refresh_status(&mut jobs);
@@ -224,7 +229,9 @@ impl GitExileApp {
     }
 
     fn handle_messages(&mut self) {
-        for msg in self.worker.poll() {
+        let mut done = self.worker.poll();
+        done.extend(self.network.poll());
+        for msg in done {
             let Some(index) = self.tabs.iter().position(|t| t.id == msg.tab) else {
                 continue;
             };
@@ -274,6 +281,7 @@ impl GitExileApp {
                     if let TabContent::Repo(repo) = &mut tab.content {
                         let mut jobs = Jobs {
                             worker: &mut self.worker,
+                            network: &mut self.network,
                             tab: tab.id,
                         };
                         repo.handle(repo_msg, &mut jobs);
@@ -633,6 +641,7 @@ impl eframe::App for GitExileApp {
                     TabContent::Repo(repo) => {
                         let mut jobs = Jobs {
                             worker: &mut self.worker,
+                            network: &mut self.network,
                             tab: tab.id,
                         };
                         // Cada pestaña guarda su propio scroll y estado de widgets.

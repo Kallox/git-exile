@@ -3,7 +3,7 @@
 Cliente gráfico de git escrito en Rust con [egui](https://github.com/emilk/egui).
 
 Permite ver el historial de un repositorio, revisar los cambios de cada commit y crear commits nuevos.
-No se conecta con GitHub, GitLab ni ningún otro servicio: ejecuta el binario `git` instalado en el sistema,
+No usa la API de GitHub, GitLab ni de ningún otro servicio: ejecuta el binario `git` instalado en el sistema,
 por lo que usa tu configuración de git tal cual (`user.name`, `user.email`, hooks, firma GPG/SSH,
 credential helpers, etc.).
 
@@ -29,6 +29,7 @@ credential helpers, etc.).
 - Editor de commits con resumen, descripción y opción de amend.
 - Crear ramas a partir del commit seleccionado (por defecto HEAD), con opción de cambiar a ellas.
 - Cambiar entre todas las ramas locales y remotas desde un selector con filtro.
+- Fetch, pull y push desde la barra del repositorio.
 - Hacer checkout de cualquier commit desde su menú contextual (HEAD separado).
 - Refresco manual, con F5 o automático al volver a la ventana.
 - Varios repositorios abiertos a la vez en pestañas. Las pestañas abiertas se recuerdan entre sesiones.
@@ -88,6 +89,22 @@ En el panel izquierdo están los repositorios abiertos y los recientes para abri
 Los cambios sin commitear se mantienen al cambiar de rama; si chocan con la rama de destino, git rechaza
 el cambio y se muestra su mensaje.
 
+### Sincronizar con el remoto
+
+Los botones de la barra del repositorio usan tus credenciales de git (agente SSH, credential helper). La
+aplicación no puede pedir contraseñas ni passphrases: si git las necesita, la operación falla o, en el caso
+de SSH lanzando la aplicación desde una terminal, espera a que se escriban allí.
+
+- **Fetch** baja las novedades de todos los remotos sin tocar tus ramas ni tus archivos.
+- **Pull** trae los commits de la rama remota solo si la rama local puede avanzar sin combinar nada
+  (`git pull --ff-only`, ignora `pull.rebase`). Si las ramas han divergido, no cambia nada y lo avisa: el merge
+  o el rebase se hacen desde la terminal.
+- **Push** sube la rama actual. Si no sigue a ninguna remota, la crea en `origin` (o en el primer remoto) y
+  la deja seguida. Nunca fuerza: si el remoto tiene commits que no están aquí, se rechaza y pide hacer pull.
+
+Un repositorio sin remotos muestra "Conectar remoto…": pega la dirección de un repositorio vacío creado en
+GitHub, GitLab u otro servidor y se añadirá como `origin`. Nada se sube hasta pulsar Push.
+
 ### Descartar cambios
 
 El icono de la papelera de cada archivo descarta sus cambios, tras pedir confirmación; no se puede deshacer.
@@ -143,6 +160,7 @@ src/
 │   ├── diff.rs          Parser de diffs unificados
 │   ├── branch.rs        Listar, crear y cambiar de rama, checkout de commits
 │   ├── remote.rs        Remotos y servicio en el que están alojados
+│   ├── sync.rs          Fetch, pull y push
 │   ├── status.rs        Estado del working tree
 │   ├── worktree.rs      Diffs de cambios sin commitear
 │   └── commit.rs        Añadir/quitar del índice y crear commits
@@ -154,6 +172,7 @@ src/
     ├── status_panel.rs
     ├── commit_editor.rs
     ├── branch_dialog.rs Diálogo de nueva rama
+    ├── connect_remote_dialog.rs Diálogo para conectar un remoto
     ├── theme.rs         Temas de color, fuentes y estilo global
     ├── icons.rs         Iconos vectoriales y botones
     └── repo_browser.rs  Buscador de repositorios
