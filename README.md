@@ -41,7 +41,15 @@ credential helpers, etc.).
 
 Cada versión publica ejecutables en la página de Releases del repositorio; no hace falta instalar Rust.
 
-- **Linux**: descarga `git-exile-linux-x86_64.tar.gz`, descomprímelo y ejecuta `./git-exile`.
+- **Linux**: descarga `git-exile-linux-x86_64.tar.gz`, descomprímelo y ejecuta `./git-exile`. Para tenerlo
+  en el menú de aplicaciones y con su icono (en Wayland es la única forma de que la ventana lo muestre):
+
+  ```sh
+  install -Dm755 git-exile ~/.local/bin/git-exile
+  install -Dm644 git-exile.png ~/.local/share/icons/hicolor/256x256/apps/git-exile.png
+  install -Dm644 git-exile.desktop ~/.local/share/applications/git-exile.desktop
+  ```
+
 - **Windows**: descarga `git-exile-windows-x86_64.zip`, descomprímelo y abre `git-exile.exe`. Necesita
   [Git para Windows](https://git-scm.com/download/win).
 

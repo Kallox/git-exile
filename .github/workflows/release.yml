@@ -42,7 +42,11 @@ jobs:
 
       - name: Empaquetar (Linux)
         if: runner.os == 'Linux'
-        run: tar -czf git-exile-${{ matrix.name }}.tar.gz LICENSE -C target/release git-exile
+        run: |
+          mkdir package
+          cp target/release/git-exile LICENSE assets/git-exile.desktop package/
+          cp assets/icon-256.png package/git-exile.png
+          tar -czf git-exile-${{ matrix.name }}.tar.gz -C package .
 
       - name: Empaquetar (Windows)
         if: runner.os == 'Windows'

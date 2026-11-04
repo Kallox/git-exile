@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=git-exile
+Comment=Git graphical client
+Exec=git-exile %F
+Icon=git-exile
+Terminal=false
+Categories=Development;RevisionControl;
+StartupWMClass=git-exile
