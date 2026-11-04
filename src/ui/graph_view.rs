@@ -1,6 +1,6 @@
 //! Dibuja una fila del grafo de commits.
 
-use eframe::egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, epaint::CubicBezierShape, pos2};
+use eframe::egui::{Color32, Painter, Rect, Stroke, pos2};
 
 use super::theme;
 use crate::git::{GraphRow, Half};
@@ -57,7 +57,7 @@ pub fn paint_row(
         };
         let p0 = pos2(lane_x(rect, seg.from), y0);
         let p1 = pos2(lane_x(rect, seg.to), y1);
-        line(&painter, p0, p1, color(seg.color));
+        painter.line_segment([p0, p1], Stroke::new(LINE_WIDTH, color(seg.color)));
     }
 
     let center = pos2(lane_x(rect, row.lane), cy);
@@ -86,19 +86,4 @@ pub fn paint_worktree_node(painter: &Painter, rect: Rect, bg: Color32) {
         y += 5.0;
     }
     painter.circle(center, NODE_RADIUS + 0.5, bg, Stroke::new(2.0, grey));
-}
-
-fn line(painter: &Painter, p0: Pos2, p1: Pos2, color: Color32) {
-    let stroke = Stroke::new(LINE_WIDTH, color);
-    if (p0.x - p1.x).abs() < f32::EPSILON {
-        painter.line_segment([p0, p1], stroke);
-    } else {
-        let mid = (p0.y + p1.y) / 2.0;
-        painter.add(Shape::CubicBezier(CubicBezierShape::from_points_stroke(
-            [p0, pos2(p0.x, mid), pos2(p1.x, mid), p1],
-            false,
-            Color32::TRANSPARENT,
-            stroke,
-        )));
-    }
 }
