@@ -13,19 +13,19 @@ pub const MAX_VISIBLE_LANES: usize = 16;
 const NODE_RADIUS: f32 = 4.5;
 const LINE_WIDTH: f32 = 2.0;
 
-const PALETTE: [Color32; 8] = [
-    theme::ACCENT,
-    theme::TEAL,
-    theme::ORANGE,
-    theme::BLUE,
-    theme::GREEN,
-    theme::YELLOW,
-    Color32::from_rgb(0xF2, 0x8B, 0xC6),
-    theme::RED,
-];
-
 pub fn color(index: usize) -> Color32 {
-    PALETTE[index % PALETTE.len()]
+    let c = theme::colors();
+    let palette = [
+        c.accent,
+        c.teal,
+        c.orange,
+        c.blue,
+        c.green,
+        c.yellow,
+        Color32::from_rgb(0xF2, 0x8B, 0xC6),
+        c.red,
+    ];
+    palette[index % palette.len()]
 }
 
 /// Ancho de la columna del grafo para `lanes` carriles.
@@ -77,7 +77,7 @@ pub fn paint_worktree_node(painter: &Painter, rect: Rect, bg: Color32) {
     let painter = painter.with_clip_rect(rect.intersect(painter.clip_rect()));
     let x = lane_x(rect, 0);
     let center = pos2(x, rect.center().y);
-    let grey = theme::TEXT_MUTED;
+    let grey = theme::colors().text_muted;
     let stroke = Stroke::new(LINE_WIDTH, grey);
     // Línea discontinua hacia HEAD.
     let mut y = center.y;

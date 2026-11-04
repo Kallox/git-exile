@@ -14,7 +14,9 @@ use crate::browser::{self, DirEntry};
 /// Profundidad máxima de la búsqueda recursiva.
 const SEARCH_DEPTH: usize = 5;
 const MAX_RESULTS: usize = 1000;
-const REPO_COLOR: Color32 = theme::GREEN;
+fn repo_color() -> Color32 {
+    theme::colors().green
+}
 
 pub enum BrowserAction {
     Open(PathBuf),
@@ -139,7 +141,7 @@ impl RepoBrowser {
                 ui.label(
                     RichText::new("Abrir repositorio")
                         .font(theme::font_semibold(16.0))
-                        .color(theme::TEXT),
+                        .color(theme::colors().text),
                 );
             });
             ui.add_space(4.0);
@@ -221,12 +223,12 @@ impl RepoBrowser {
                             ui.label(
                                 RichText::new(target.display().to_string())
                                     .font(theme::mono(12.0))
-                                    .color(theme::TEXT_SECONDARY),
+                                    .color(theme::colors().text_secondary),
                             );
                         } else {
                             ui.label(
                                 RichText::new("Selecciona una carpeta que sea un repositorio git.")
-                                    .color(theme::TEXT_MUTED),
+                                    .color(theme::colors().text_muted),
                             );
                         }
                     });
@@ -250,7 +252,9 @@ impl RepoBrowser {
                     }
                     section_title(ui, "Recientes");
                     if recent.is_empty() {
-                        ui.label(RichText::new("Ninguno todavía").color(theme::TEXT_MUTED));
+                        ui.label(
+                            RichText::new("Ninguno todavía").color(theme::colors().text_muted),
+                        );
                     }
                     for path in recent {
                         if repo_link(ui, path).clicked() {
@@ -330,7 +334,7 @@ impl RepoBrowser {
                             root.display()
                         )
                     };
-                    ui.colored_label(REPO_COLOR, text);
+                    ui.colored_label(repo_color(), text);
                     ui.separator();
                 }
                 match &self.entries {
@@ -390,7 +394,7 @@ fn section_title(ui: &mut Ui, text: &str) {
     ui.label(
         RichText::new(text.to_uppercase())
             .font(theme::font_semibold(11.0))
-            .color(theme::TEXT_MUTED),
+            .color(theme::colors().text_muted),
     );
 }
 
@@ -411,7 +415,7 @@ fn folder_row(ui: &mut Ui, name: &str, repo: bool, selected: bool, badge: bool) 
     if selected {
         painter.rect_filled(rect, 7.0, theme::accent_soft());
     } else if resp.hovered() {
-        painter.rect_filled(rect, 7.0, theme::BG_CARD);
+        painter.rect_filled(rect, 7.0, theme::colors().bg_card);
     }
     let icon_rect = egui::Rect::from_center_size(
         egui::pos2(rect.left() + 10.0 + 7.0, rect.center().y),
@@ -422,9 +426,9 @@ fn folder_row(ui: &mut Ui, name: &str, repo: bool, selected: bool, badge: bool) 
         icon_rect,
         Icon::Folder,
         if repo {
-            theme::ACCENT
+            theme::colors().accent
         } else {
-            theme::TEXT_MUTED
+            theme::colors().text_muted
         },
         2.0,
     );
@@ -438,13 +442,17 @@ fn folder_row(ui: &mut Ui, name: &str, repo: bool, selected: bool, badge: bool) 
         egui::Align2::LEFT_CENTER,
         name,
         font,
-        if repo { theme::TEXT } else { theme::TEXT_SOFT },
+        if repo {
+            theme::colors().text
+        } else {
+            theme::colors().text_soft
+        },
     );
     if badge {
         let galley = painter.layout_no_wrap(
             "repositorio git".to_owned(),
             theme::font_semibold(11.0),
-            REPO_COLOR,
+            repo_color(),
         );
         let badge_rect = egui::Rect::from_min_size(
             egui::pos2(text.right() + 10.0, rect.center().y - 10.0),
@@ -453,8 +461,8 @@ fn folder_row(ui: &mut Ui, name: &str, repo: bool, selected: bool, badge: bool) 
         painter.rect(
             badge_rect,
             5.0,
-            theme::alpha(REPO_COLOR, 0.14),
-            egui::Stroke::new(1.0, theme::alpha(REPO_COLOR, 0.4)),
+            theme::alpha(repo_color(), 0.14),
+            egui::Stroke::new(1.0, theme::alpha(repo_color(), 0.4)),
             egui::StrokeKind::Inside,
         );
         painter.galley(
@@ -463,7 +471,7 @@ fn folder_row(ui: &mut Ui, name: &str, repo: bool, selected: bool, badge: bool) 
                 rect.center().y - galley.size().y / 2.0,
             ),
             galley,
-            REPO_COLOR,
+            repo_color(),
         );
     }
     resp

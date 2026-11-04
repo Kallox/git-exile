@@ -62,8 +62,8 @@ impl CommitEditor {
         let shortcut = ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::Enter));
 
         egui::Frame::new()
-            .fill(theme::BG_CARD)
-            .stroke(egui::Stroke::new(1.0, theme::BORDER))
+            .fill(theme::colors().bg_card)
+            .stroke(egui::Stroke::new(1.0, theme::colors().border))
             .corner_radius(10)
             .inner_margin(egui::Margin::symmetric(16, 14))
             .show(ui, |ui| {
@@ -87,7 +87,7 @@ impl CommitEditor {
                 ui.label(
                     RichText::new(format!("como {author}"))
                         .size(12.0)
-                        .color(theme::TEXT_MUTED),
+                        .color(theme::colors().text_muted),
                 );
             }
         });

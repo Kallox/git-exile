@@ -273,7 +273,7 @@ fn header(ui: &mut Ui, graph_width: f32) {
     painter.hline(
         rect.x_range(),
         rect.bottom() - 0.5,
-        Stroke::new(1.0, theme::BORDER_SOFT),
+        Stroke::new(1.0, theme::colors().border_soft),
     );
     let cols = Columns::new(rect, graph_width);
     let y = rect.center().y;
@@ -284,7 +284,7 @@ fn header(ui: &mut Ui, graph_width: f32) {
             Align2::LEFT_CENTER,
             s,
             font.clone(),
-            theme::TEXT_MUTED,
+            theme::colors().text_muted,
         );
     };
     text(cols.branch + 16.0, "RAMA");
@@ -300,12 +300,12 @@ fn row_background(ui: &Ui, rect: Rect, selected: bool, hovered: bool) -> Color32
         ui.painter()
             .rect_filled(rect, 0.0, theme::accent_selected());
         // Mezcla aproximada del acento sobre el fondo, para rellenar los nodos.
-        theme::BG_ACTIVE
+        theme::colors().bg_active
     } else if hovered {
-        ui.painter().rect_filled(rect, 0.0, theme::BG_CARD);
-        theme::BG_CARD
+        ui.painter().rect_filled(rect, 0.0, theme::colors().bg_card);
+        theme::colors().bg_card
     } else {
-        theme::BG
+        theme::colors().bg
     }
 }
 
@@ -327,9 +327,9 @@ fn paint_worktree_row(
     graph_view::paint_worktree_node(&painter, graph_rect, bg);
 
     let color = if selected {
-        theme::TEXT_STRONG
+        theme::colors().text_strong
     } else {
-        theme::TEXT_SECONDARY
+        theme::colors().text_secondary
     };
     let text = match changes {
         1 => "Cambios sin commitear (1 archivo)".to_owned(),
@@ -377,9 +377,9 @@ fn paint_row(
         &commit.short_id,
         theme::mono(12.0),
         if selected {
-            theme::ACCENT
+            theme::colors().accent
         } else {
-            theme::TEXT_MUTED
+            theme::colors().text_muted
         },
     );
 
@@ -394,7 +394,7 @@ fn paint_row(
             Align2::LEFT_CENTER,
             super::format_time(commit.time),
             theme::font(13.0),
-            theme::TEXT_DATE,
+            theme::colors().text_date,
         );
 
     // Autor con avatar.
@@ -409,7 +409,7 @@ fn paint_row(
         Align2::LEFT_CENTER,
         &commit.author_name,
         theme::font(13.0),
-        theme::TEXT_SOFT,
+        theme::colors().text_soft,
     );
 
     // Etiquetas de ramas/tags y mensaje.
@@ -425,9 +425,9 @@ fn paint_row(
         &commit.summary,
         theme::font(13.0),
         if selected {
-            theme::TEXT_STRONG
+            theme::colors().text_strong
         } else {
-            theme::TEXT
+            theme::colors().text
         },
     );
 }
@@ -514,18 +514,19 @@ pub fn avatar(painter: &egui::Painter, center: egui::Pos2, radius: f32, name: &s
 }
 
 fn avatar_colors(name: &str) -> (Color32, Color32) {
-    const COLORS: [(Color32, Color32); 6] = [
-        (theme::ACCENT, Color32::from_rgb(0xD6, 0xCB, 0xFF)),
-        (theme::TEAL, Color32::from_rgb(0x7F, 0xDC, 0xCD)),
-        (theme::ORANGE, theme::ORANGE_TEXT),
-        (theme::BLUE, Color32::from_rgb(0xA9, 0xC4, 0xFA)),
-        (theme::GREEN, Color32::from_rgb(0xA8, 0xEB, 0xCD)),
-        (theme::YELLOW, Color32::from_rgb(0xF6, 0xD9, 0x96)),
+    let c = theme::colors();
+    let colors = [
+        (c.accent, theme::lighten(c.accent, 0.45)),
+        (c.teal, theme::lighten(c.teal, 0.45)),
+        (c.orange, c.orange_text),
+        (c.blue, theme::lighten(c.blue, 0.45)),
+        (c.green, theme::lighten(c.green, 0.45)),
+        (c.yellow, theme::lighten(c.yellow, 0.45)),
     ];
     let hash = name
         .bytes()
         .fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32));
-    let (base, fg) = COLORS[hash as usize % COLORS.len()];
+    let (base, fg) = colors[hash as usize % colors.len()];
     (theme::alpha(base, 0.2), fg)
 }
 
@@ -594,21 +595,23 @@ fn ref_style(kind: RefKind) -> RefStyle {
     };
     match kind {
         RefKind::Branch { current: true } => RefStyle {
-            fill: theme::ACCENT,
+            fill: theme::colors().accent,
             stroke: Stroke::NONE,
-            text: theme::TEXT_ON_ACCENT,
+            text: theme::colors().text_on_accent,
             icon: Some(Icon::BranchSmall),
         },
-        RefKind::Branch { current: false } => {
-            soft(theme::ORANGE, theme::ORANGE_TEXT, Some(Icon::BranchSmall))
-        }
+        RefKind::Branch { current: false } => soft(
+            theme::colors().orange,
+            theme::colors().orange_text,
+            Some(Icon::BranchSmall),
+        ),
         RefKind::Remote => RefStyle {
             fill: Color32::TRANSPARENT,
-            stroke: Stroke::new(1.0, theme::BORDER_BADGE),
-            text: theme::TEXT_SOFT,
+            stroke: Stroke::new(1.0, theme::colors().border_badge),
+            text: theme::colors().text_soft,
             icon: Some(Icon::Cloud),
         },
-        RefKind::Tag => soft(theme::YELLOW, theme::YELLOW, None),
-        RefKind::Head => soft(theme::RED, theme::RED, None),
+        RefKind::Tag => soft(theme::colors().yellow, theme::colors().yellow, None),
+        RefKind::Head => soft(theme::colors().red, theme::colors().red, None),
     }
 }

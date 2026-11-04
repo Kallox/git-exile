@@ -36,13 +36,13 @@ pub fn show(
                 egui::Label::new(
                     RichText::new(summary)
                         .font(theme::font_semibold(18.0))
-                        .color(theme::TEXT),
+                        .color(theme::colors().text),
                 )
                 .wrap(),
             );
             let body = body.trim();
             if !body.is_empty() {
-                ui.label(RichText::new(body).color(theme::TEXT_SECONDARY));
+                ui.label(RichText::new(body).color(theme::colors().text_secondary));
             }
             ui.add_space(12.0);
 
@@ -62,14 +62,14 @@ pub fn show(
                         ui.label(
                             RichText::new("Respecto al primer padre")
                                 .size(12.0)
-                                .color(theme::TEXT_MUTED),
+                                .color(theme::colors().text_muted),
                         );
                     });
                 }
             });
             if details.truncated {
                 ui.colored_label(
-                    theme::YELLOW,
+                    theme::colors().yellow,
                     "El diff es demasiado grande y se ha cortado.",
                 );
             }
@@ -80,9 +80,11 @@ pub fn show(
 
 /// Etiqueta redondeada con icono sobre fondo de acento.
 fn pill(ui: &mut Ui, icon: Icon, text: &str) {
-    let galley =
-        ui.painter()
-            .layout_no_wrap(text.to_owned(), theme::font_semibold(11.0), theme::ACCENT);
+    let galley = ui.painter().layout_no_wrap(
+        text.to_owned(),
+        theme::font_semibold(11.0),
+        theme::colors().accent,
+    );
     let size = vec2(8.0 + 11.0 + 5.0 + galley.size().x + 8.0, 20.0);
     let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
     let painter = ui.painter();
@@ -94,7 +96,7 @@ fn pill(ui: &mut Ui, icon: Icon, text: &str) {
             vec2(11.0, 11.0),
         ),
         icon,
-        theme::ACCENT,
+        theme::colors().accent,
         2.4,
     );
     painter.galley(
@@ -103,7 +105,7 @@ fn pill(ui: &mut Ui, icon: Icon, text: &str) {
             rect.center().y - galley.size().y / 2.0,
         ),
         galley,
-        theme::ACCENT,
+        theme::colors().accent,
     );
 }
 
@@ -111,8 +113,8 @@ fn pill(ui: &mut Ui, icon: Icon, text: &str) {
 fn meta_card(ui: &mut Ui, details: &CommitDetails) -> Option<DetailsAction> {
     let mut action = None;
     egui::Frame::new()
-        .fill(theme::BG_CARD)
-        .stroke(Stroke::new(1.0, theme::BORDER))
+        .fill(theme::colors().bg_card)
+        .stroke(Stroke::new(1.0, theme::colors().border))
         .corner_radius(10)
         .inner_margin(egui::Margin::symmetric(16, 14))
         .show(ui, |ui| {
@@ -123,7 +125,11 @@ fn meta_card(ui: &mut Ui, details: &CommitDetails) -> Option<DetailsAction> {
                 .spacing([12.0, 10.0])
                 .show(ui, |ui| {
                     let label = |ui: &mut Ui, text: &str| {
-                        ui.label(RichText::new(text).size(12.0).color(theme::TEXT_MUTED));
+                        ui.label(
+                            RichText::new(text)
+                                .size(12.0)
+                                .color(theme::colors().text_muted),
+                        );
                     };
 
                     label(ui, "Autor");
@@ -146,7 +152,7 @@ fn meta_card(ui: &mut Ui, details: &CommitDetails) -> Option<DetailsAction> {
                             super::format_date_long(details.committer.time)
                         ));
                     }
-                    ui.label(RichText::new(date).color(theme::TEXT_SOFT));
+                    ui.label(RichText::new(date).color(theme::colors().text_soft));
                     ui.end_row();
 
                     label(ui, "Commit");
@@ -154,7 +160,7 @@ fn meta_card(ui: &mut Ui, details: &CommitDetails) -> Option<DetailsAction> {
                         ui.label(
                             RichText::new(&details.id)
                                 .font(theme::mono(12.0))
-                                .color(theme::TEXT_SOFT),
+                                .color(theme::colors().text_soft),
                         );
                         if copy_button(ui).on_hover_text("Copiar hash").clicked() {
                             ui.ctx().copy_text(details.id.clone());
@@ -195,8 +201,8 @@ fn person(ui: &mut Ui, p: &Person) {
     ui.horizontal(|ui| {
         let (rect, _) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::hover());
         avatar(ui.painter(), rect.center(), 11.0, &p.name);
-        ui.label(RichText::new(&p.name).color(theme::TEXT));
-        ui.label(RichText::new(&p.email).color(theme::TEXT_MUTED));
+        ui.label(RichText::new(&p.name).color(theme::colors().text));
+        ui.label(RichText::new(&p.email).color(theme::colors().text_muted));
     });
 }
 
@@ -208,18 +214,18 @@ fn copy_button(ui: &mut Ui) -> egui::Response {
         rect,
         6.0,
         if resp.hovered() {
-            theme::BG_ACTIVE
+            theme::colors().bg_active
         } else {
-            theme::BG_BUTTON
+            theme::colors().bg_button
         },
-        Stroke::new(1.0, theme::BORDER_BUTTON),
+        Stroke::new(1.0, theme::colors().border_button),
         egui::StrokeKind::Inside,
     );
     icons::paint(
         painter,
         Rect::from_center_size(rect.center(), vec2(13.0, 13.0)),
         Icon::Copy,
-        theme::TEXT_SECONDARY,
+        theme::colors().text_secondary,
         2.0,
     );
     resp
@@ -278,7 +284,7 @@ pub fn file_row(
     if selected {
         painter.rect_filled(rect, 7.0, theme::accent_soft());
     } else if resp.hovered() {
-        painter.rect_filled(rect, 7.0, theme::BG_CARD);
+        painter.rect_filled(rect, 7.0, theme::colors().bg_card);
     }
     let y = rect.center().y;
     let badge = Rect::from_min_size(pos2(rect.left() + 10.0, y - 9.0), vec2(18.0, 18.0));
@@ -293,7 +299,7 @@ pub fn file_row(
                 Align2::RIGHT_CENTER,
                 format!("−{removed}"),
                 theme::mono(12.0),
-                theme::RED,
+                theme::colors().red,
             );
             right = r.left() - 8.0;
             let r = painter.text(
@@ -301,7 +307,7 @@ pub fn file_row(
                 Align2::RIGHT_CENTER,
                 format!("+{added}"),
                 theme::mono(12.0),
-                theme::GREEN,
+                theme::colors().green,
             );
             right = r.left() - 10.0;
         }
@@ -312,7 +318,7 @@ pub fn file_row(
                 Align2::RIGHT_CENTER,
                 "binario",
                 theme::font(12.0),
-                theme::TEXT_MUTED,
+                theme::colors().text_muted,
             );
             right = r.left() - 10.0;
         }
@@ -327,13 +333,13 @@ pub fn file_row(
     let painter = painter.with_clip_rect(clip);
     let mut job = egui::text::LayoutJob::default();
     let format = |color| egui::TextFormat::simple(theme::mono(12.0), color);
-    job.append(dir, 0.0, format(theme::TEXT_MUTED));
-    job.append(name, 0.0, format(theme::TEXT));
+    job.append(dir, 0.0, format(theme::colors().text_muted));
+    job.append(name, 0.0, format(theme::colors().text));
     let galley = ui.fonts_mut(|f| f.layout_job(job));
     painter.galley(
         pos2(clip.left(), y - galley.size().y / 2.0),
         galley,
-        theme::TEXT,
+        theme::colors().text,
     );
     resp.on_hover_text(path)
 }
@@ -352,9 +358,9 @@ pub fn paint_badge(painter: &egui::Painter, rect: Rect, letter: char, color: Col
 
 pub fn status_color(status: FileStatus) -> Color32 {
     match status {
-        FileStatus::Added => theme::GREEN,
-        FileStatus::Deleted => theme::RED,
-        FileStatus::Modified => theme::YELLOW,
-        FileStatus::Renamed | FileStatus::Copied => theme::BLUE,
+        FileStatus::Added => theme::colors().green,
+        FileStatus::Deleted => theme::colors().red,
+        FileStatus::Modified => theme::colors().yellow,
+        FileStatus::Renamed | FileStatus::Copied => theme::colors().blue,
     }
 }

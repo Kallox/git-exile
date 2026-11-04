@@ -41,12 +41,12 @@ impl DiscardDialog {
             ui.label(
                 RichText::new("Descartar cambios")
                     .font(theme::font_semibold(16.0))
-                    .color(theme::TEXT),
+                    .color(theme::colors().text),
             );
             ui.add_space(8.0);
             egui::Frame::new()
-                .fill(theme::BG_CODE)
-                .stroke(egui::Stroke::new(1.0, theme::BORDER))
+                .fill(theme::colors().bg_code)
+                .stroke(egui::Stroke::new(1.0, theme::colors().border))
                 .corner_radius(8)
                 .inner_margin(egui::Margin::symmetric(10, 8))
                 .show(ui, |ui| {
@@ -54,12 +54,12 @@ impl DiscardDialog {
                     ui.label(
                         RichText::new(&self.entry.path)
                             .font(theme::mono(12.0))
-                            .color(theme::TEXT_SOFT),
+                            .color(theme::colors().text_soft),
                     );
                 });
             ui.add_space(8.0);
             ui.label(self.description());
-            ui.colored_label(theme::RED, "Esta acción no se puede deshacer.");
+            ui.colored_label(theme::colors().red, "Esta acción no se puede deshacer.");
             ui.add_space(8.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // Sin atajo de teclado: se confirma solo con un clic deliberado.

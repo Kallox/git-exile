@@ -47,17 +47,21 @@ impl NewBranchDialog {
             ui.label(
                 RichText::new("Nueva rama")
                     .font(theme::font_semibold(16.0))
-                    .color(theme::TEXT),
+                    .color(theme::colors().text),
             );
             ui.add_space(8.0);
 
             let label = |ui: &mut egui::Ui, text: &str| {
-                ui.label(RichText::new(text).size(12.0).color(theme::TEXT_MUTED));
+                ui.label(
+                    RichText::new(text)
+                        .size(12.0)
+                        .color(theme::colors().text_muted),
+                );
             };
             label(ui, "Desde");
             egui::Frame::new()
-                .fill(theme::BG_CODE)
-                .stroke(egui::Stroke::new(1.0, theme::BORDER))
+                .fill(theme::colors().bg_code)
+                .stroke(egui::Stroke::new(1.0, theme::colors().border))
                 .corner_radius(8)
                 .inner_margin(egui::Margin::symmetric(10, 8))
                 .show(ui, |ui| {
@@ -65,7 +69,7 @@ impl NewBranchDialog {
                     ui.label(
                         RichText::new(&self.start_label)
                             .font(theme::mono(12.0))
-                            .color(theme::TEXT_SOFT),
+                            .color(theme::colors().text_soft),
                     );
                 });
             ui.add_space(8.0);
@@ -88,7 +92,7 @@ impl NewBranchDialog {
 
             if let Some(error) = &self.error {
                 ui.add_space(4.0);
-                ui.colored_label(theme::RED, error);
+                ui.colored_label(theme::colors().red, error);
             }
 
             ui.add_space(8.0);

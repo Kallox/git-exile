@@ -608,7 +608,7 @@ impl RepoTab {
             ui.label(
                 egui::RichText::new(self.repo.name())
                     .font(theme::font_semibold(16.0))
-                    .color(theme::TEXT),
+                    .color(theme::colors().text),
             )
             .on_hover_text(self.repo.root().display().to_string());
             if let Some(remotes) = &self.remotes {
@@ -684,16 +684,22 @@ impl RepoTab {
         egui::TopBottomPanel::top("repo_error")
             .frame(
                 egui::Frame::new()
-                    .fill(theme::alpha(theme::RED, 0.10))
+                    .fill(theme::alpha(theme::colors().red, 0.10))
                     .inner_margin(egui::Margin::symmetric(20, 8)),
             )
             .show_inside(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.colored_label(theme::RED, error);
+                    ui.colored_label(theme::colors().red, error);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        close = icons::icon_button(ui, Icon::Close, 24.0, 12.0, theme::TEXT_MUTED)
-                            .on_hover_text("Cerrar")
-                            .clicked();
+                        close = icons::icon_button(
+                            ui,
+                            Icon::Close,
+                            24.0,
+                            12.0,
+                            theme::colors().text_muted,
+                        )
+                        .on_hover_text("Cerrar")
+                        .clicked();
                     });
                 });
             });
@@ -750,7 +756,7 @@ impl RepoTab {
                         ui.label(
                             egui::RichText::new(title.to_uppercase())
                                 .font(theme::font_semibold(11.0))
-                                .color(theme::TEXT_MUTED),
+                                .color(theme::colors().text_muted),
                         );
                         for branch in list.iter() {
                             let resp = branch_row(ui, branch);
@@ -940,12 +946,12 @@ fn branch_button(ui: &mut egui::Ui, branch: Option<&str>) -> egui::Response {
         }
         .to_owned(),
         theme::font(13.0),
-        theme::TEXT_SECONDARY,
+        theme::colors().text_secondary,
     );
     let name = painter.layout_no_wrap(
         branch.unwrap_or_default().to_owned(),
         theme::font_semibold(13.0),
-        theme::TEXT,
+        theme::colors().text,
     );
     let gap = 8.0;
     let name_width = if branch.is_some() {
@@ -957,7 +963,7 @@ fn branch_button(ui: &mut egui::Ui, branch: Option<&str>) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 34.0), egui::Sense::click());
     let painter = ui.painter();
     let fill = if resp.hovered() {
-        theme::alpha(theme::ACCENT, 0.2)
+        theme::alpha(theme::colors().accent, 0.2)
     } else {
         theme::accent_soft()
     };
@@ -974,24 +980,28 @@ fn branch_button(ui: &mut egui::Ui, branch: Option<&str>) -> egui::Response {
         painter,
         egui::Rect::from_min_size(egui::pos2(x, cy - 7.0), egui::vec2(14.0, 14.0)),
         Icon::Branch,
-        theme::ACCENT,
+        theme::colors().accent,
         2.0,
     );
     x += 14.0 + gap;
     let h = label.size().y;
     let w = label.size().x;
-    painter.galley(egui::pos2(x, cy - h / 2.0), label, theme::TEXT_SECONDARY);
+    painter.galley(
+        egui::pos2(x, cy - h / 2.0),
+        label,
+        theme::colors().text_secondary,
+    );
     x += w + gap;
     if branch.is_some() {
         let w = name.size().x;
-        painter.galley(egui::pos2(x, cy - h / 2.0), name, theme::TEXT);
+        painter.galley(egui::pos2(x, cy - h / 2.0), name, theme::colors().text);
         x += w + gap;
     }
     icons::paint(
         painter,
         egui::Rect::from_min_size(egui::pos2(x, cy - 6.0), egui::vec2(12.0, 12.0)),
         Icon::ChevronDown,
-        theme::TEXT_MUTED,
+        theme::colors().text_muted,
         2.2,
     );
     resp
@@ -1013,19 +1023,19 @@ fn hosting_chip(ui: &mut egui::Ui, remotes: &[git::Remote]) {
         (Icon::Cloud, hosting_text(remotes), hint.join("\n"))
     };
     egui::Frame::new()
-        .fill(theme::BG_INPUT)
+        .fill(theme::colors().bg_input)
         .corner_radius(8)
         .inner_margin(egui::Margin::symmetric(12, 0))
         .show(ui, |ui| {
             ui.set_height(34.0);
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
-                icons::show(ui, icon, 14.0, theme::TEXT_SECONDARY);
+                icons::show(ui, icon, 14.0, theme::colors().text_secondary);
                 ui.add(
                     egui::Label::new(
                         egui::RichText::new(text)
                             .size(12.0)
-                            .color(theme::TEXT_SECONDARY),
+                            .color(theme::colors().text_secondary),
                     )
                     .selectable(false),
                 );
@@ -1050,23 +1060,23 @@ fn hosting_text(remotes: &[git::Remote]) -> String {
 /// Rama remota que se sigue, con commits por subir y por bajar.
 fn upstream_chip(ui: &mut egui::Ui, upstream: &str, ahead: u32, behind: u32) {
     egui::Frame::new()
-        .fill(theme::BG_INPUT)
+        .fill(theme::colors().bg_input)
         .corner_radius(8)
         .inner_margin(egui::Margin::symmetric(12, 0))
         .show(ui, |ui| {
             ui.set_height(34.0);
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
-                icons::show(ui, Icon::Cloud, 14.0, theme::TEXT_SECONDARY);
+                icons::show(ui, Icon::Cloud, 14.0, theme::colors().text_secondary);
                 let mono = |text: String, color| {
                     egui::RichText::new(text)
                         .font(theme::mono(12.0))
                         .color(color)
                 };
-                ui.label(mono(upstream.to_owned(), theme::TEXT_SECONDARY));
-                ui.label(mono(format!("↑{ahead}"), theme::GREEN))
+                ui.label(mono(upstream.to_owned(), theme::colors().text_secondary));
+                ui.label(mono(format!("↑{ahead}"), theme::colors().green))
                     .on_hover_text("Commits por subir");
-                ui.label(mono(format!("↓{behind}"), theme::TEXT_SECONDARY))
+                ui.label(mono(format!("↓{behind}"), theme::colors().text_secondary))
                     .on_hover_text("Commits por bajar");
                 let state = match (ahead, behind) {
                     (0, 0) => "Sincronizado".to_owned(),
@@ -1077,7 +1087,7 @@ fn upstream_chip(ui: &mut egui::Ui, upstream: &str, ahead: u32, behind: u32) {
                 ui.label(
                     egui::RichText::new(state)
                         .size(12.0)
-                        .color(theme::TEXT_MUTED),
+                        .color(theme::colors().text_muted),
                 );
             });
         });
@@ -1146,8 +1156,8 @@ fn search_box(
         ui.memory_mut(|m| m.request_focus(id));
     }
     egui::Frame::new()
-        .fill(theme::BG_INPUT)
-        .stroke(egui::Stroke::new(1.0, theme::BORDER_STRONG))
+        .fill(theme::colors().bg_input)
+        .stroke(egui::Stroke::new(1.0, theme::colors().border_strong))
         .corner_radius(8)
         .inner_margin(egui::Margin::symmetric(12, 0))
         .show(ui, |ui| {
@@ -1158,7 +1168,7 @@ fn search_box(
                 search_controls(ui, text, results, id, &mut step);
             }
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                icons::show(ui, Icon::Search, 14.0, theme::TEXT_MUTED);
+                icons::show(ui, Icon::Search, 14.0, theme::colors().text_muted);
                 let edit = ui.add(
                     egui::TextEdit::singleline(text)
                         .id(id)
@@ -1197,7 +1207,7 @@ fn search_controls(
     step: &mut Option<bool>,
 ) {
     ui.spacing_mut().item_spacing.x = 2.0;
-    if icons::icon_button(ui, Icon::Close, 24.0, 12.0, theme::TEXT_MUTED)
+    if icons::icon_button(ui, Icon::Close, 24.0, 12.0, theme::colors().text_muted)
         .on_hover_text("Limpiar la búsqueda (Escape)")
         .clicked()
     {
@@ -1206,7 +1216,7 @@ fn search_controls(
     }
     ui.add_enabled_ui(results.any, |ui| {
         let mut arrow = |icon, hint: &str, forward: bool| {
-            let clicked = icons::icon_button(ui, icon, 24.0, 14.0, theme::TEXT_SECONDARY)
+            let clicked = icons::icon_button(ui, icon, 24.0, 14.0, theme::colors().text_secondary)
                 .on_hover_text(hint)
                 .clicked();
             if clicked {
@@ -1225,7 +1235,7 @@ fn search_controls(
         egui::Label::new(
             egui::RichText::new(format!("{}{dots}", results.text))
                 .size(12.0)
-                .color(theme::TEXT_MUTED),
+                .color(theme::colors().text_muted),
         )
         .selectable(false),
     );
@@ -1247,7 +1257,7 @@ fn branch_row(ui: &mut egui::Ui, branch: &git::Branch) -> egui::Response {
     if branch.current {
         painter.rect_filled(rect, 6.0, theme::accent_soft());
     } else if resp.hovered() {
-        painter.rect_filled(rect, 6.0, theme::BG_ACTIVE);
+        painter.rect_filled(rect, 6.0, theme::colors().bg_active);
     }
     let icon = if branch.remote {
         Icon::Cloud
@@ -1256,12 +1266,16 @@ fn branch_row(ui: &mut egui::Ui, branch: &git::Branch) -> egui::Response {
     };
     let (icon_color, font, text_color) = if branch.current {
         (
-            theme::ACCENT,
+            theme::colors().accent,
             theme::font_semibold(13.0),
-            theme::TEXT_STRONG,
+            theme::colors().text_strong,
         )
     } else {
-        (theme::TEXT_MUTED, theme::font(13.0), theme::TEXT)
+        (
+            theme::colors().text_muted,
+            theme::font(13.0),
+            theme::colors().text,
+        )
     };
     icons::paint(
         painter,
@@ -1288,7 +1302,7 @@ fn branch_row(ui: &mut egui::Ui, branch: &git::Branch) -> egui::Response {
                 egui::vec2(12.0, 12.0),
             ),
             Icon::Check,
-            theme::ACCENT,
+            theme::colors().accent,
             2.2,
         );
         resp.on_hover_text("Rama actual")

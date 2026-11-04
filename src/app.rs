@@ -13,6 +13,7 @@ use crate::worker::Worker;
 const RECENT_KEY: &str = "recent_repositories";
 const OPEN_TABS_KEY: &str = "open_tabs";
 const ACTIVE_TAB_KEY: &str = "active_tab";
+const THEME_KEY: &str = "theme";
 const MAX_RECENT: usize = 10;
 
 /// Resultado de un trabajo en segundo plano, etiquetado con su pestaña.
@@ -74,8 +75,14 @@ pub struct GitExileApp {
 
 impl GitExileApp {
     pub fn new(cc: &eframe::CreationContext<'_>, paths: Vec<PathBuf>) -> Self {
-        crate::ui::theme::apply(&cc.egui_ctx);
         let storage = cc.storage;
+        theme::apply(&cc.egui_ctx);
+        let saved_theme = storage
+            .and_then(|s| eframe::get_value::<String>(s, THEME_KEY))
+            .and_then(|id| theme::Theme::from_id(&id));
+        if let Some(saved) = saved_theme {
+            theme::set(&cc.egui_ctx, saved);
+        }
         let recent: Vec<PathBuf> = storage
             .and_then(|s| eframe::get_value(s, RECENT_KEY))
             .unwrap_or_default();
@@ -309,7 +316,7 @@ impl GitExileApp {
         ui.horizontal_centered(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
             egui::ScrollArea::horizontal()
-                .max_width(ui.available_width() - 180.0)
+                .max_width(ui.available_width() - 300.0)
                 .show(ui, |ui| {
                     ui.horizontal_centered(|ui| {
                         for (i, tab) in self.tabs.iter().enumerate() {
@@ -320,9 +327,15 @@ impl GitExileApp {
                                 None => {}
                             }
                         }
-                        if icons::icon_button(ui, Icon::Plus, 32.0, 14.0, theme::TEXT_MUTED)
-                            .on_hover_text("Abrir otro repositorio (Ctrl+T)")
-                            .clicked()
+                        if icons::icon_button(
+                            ui,
+                            Icon::Plus,
+                            32.0,
+                            14.0,
+                            theme::colors().text_muted,
+                        )
+                        .on_hover_text("Abrir otro repositorio (Ctrl+T)")
+                        .clicked()
                         {
                             new_tab = true;
                         }
@@ -330,6 +343,7 @@ impl GitExileApp {
                 });
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                options_menu(ui);
                 let recent = icons::button(ui, Icon::Clock, "Recientes", ButtonStyle::Ghost, true);
                 egui::Popup::menu(&recent).show(|ui| {
                     ui.set_min_width(320.0);
@@ -368,16 +382,22 @@ impl GitExileApp {
         egui::TopBottomPanel::top("error_bar")
             .frame(
                 egui::Frame::new()
-                    .fill(theme::alpha(theme::RED, 0.10))
+                    .fill(theme::alpha(theme::colors().red, 0.10))
                     .inner_margin(egui::Margin::symmetric(20, 8)),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.colored_label(theme::RED, error);
+                    ui.colored_label(theme::colors().red, error);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        close = icons::icon_button(ui, Icon::Close, 24.0, 12.0, theme::TEXT_MUTED)
-                            .on_hover_text("Cerrar")
-                            .clicked();
+                        close = icons::icon_button(
+                            ui,
+                            Icon::Close,
+                            24.0,
+                            12.0,
+                            theme::colors().text_muted,
+                        )
+                        .on_hover_text("Cerrar")
+                        .clicked();
                     });
                 });
             });
@@ -385,6 +405,70 @@ impl GitExileApp {
             self.error = None;
         }
     }
+}
+
+/// Botón de opciones con su desplegable.
+fn options_menu(ui: &mut egui::Ui) {
+    let button = icons::button(ui, Icon::Sliders, "Opciones", ButtonStyle::Ghost, true);
+    // Sigue abierto al elegir, para poder comparar los temas.
+    egui::Popup::menu(&button)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
+            ui.set_min_width(220.0);
+            ui.label(
+                egui::RichText::new("TEMA")
+                    .font(theme::font_semibold(11.0))
+                    .color(theme::colors().text_muted),
+            );
+            for option in theme::Theme::ALL {
+                if theme_row(ui, option).clicked() {
+                    theme::set(ui.ctx(), option);
+                }
+            }
+        });
+}
+
+/// Fila del selector de tema: muestra de colores, nombre y marca del activo.
+fn theme_row(ui: &mut egui::Ui, option: theme::Theme) -> egui::Response {
+    let active = option == theme::current();
+    let (rect, resp) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 30.0), egui::Sense::click());
+    let painter = ui.painter();
+    let c = theme::colors();
+    if active {
+        painter.rect_filled(rect, 6.0, theme::accent_soft());
+    } else if resp.hovered() {
+        painter.rect_filled(rect, 6.0, c.bg_active);
+    }
+    let y = rect.center().y;
+    let swatch = option.palette();
+    painter.circle(
+        egui::pos2(rect.left() + 16.0, y),
+        7.0,
+        swatch.bg,
+        egui::Stroke::new(1.0, c.border_badge),
+    );
+    painter.circle_filled(egui::pos2(rect.left() + 16.0, y), 3.5, swatch.accent);
+    painter.text(
+        egui::pos2(rect.left() + 32.0, y),
+        egui::Align2::LEFT_CENTER,
+        option.name(),
+        theme::font(13.0),
+        c.text,
+    );
+    if active {
+        icons::paint(
+            painter,
+            egui::Rect::from_center_size(
+                egui::pos2(rect.right() - 14.0, y),
+                egui::vec2(12.0, 12.0),
+            ),
+            Icon::Check,
+            c.accent,
+            2.2,
+        );
+    }
+    resp
 }
 
 enum TabWidgetAction {
@@ -400,9 +484,9 @@ fn tab_widget(ui: &mut egui::Ui, tab: &Tab, active: bool) -> Option<TabWidgetAct
         title,
         font,
         if active {
-            theme::TEXT
+            theme::colors().text
         } else {
-            theme::TEXT_SECONDARY
+            theme::colors().text_secondary
         },
     );
     let width = 12.0 + 14.0 + 8.0 + galley.size().x + 8.0 + 24.0 + 6.0;
@@ -413,12 +497,12 @@ fn tab_widget(ui: &mut egui::Ui, tab: &Tab, active: bool) -> Option<TabWidgetAct
         painter.rect(
             rect,
             8.0,
-            theme::BG_BUTTON,
-            egui::Stroke::new(1.0, theme::BORDER_STRONG),
+            theme::colors().bg_button,
+            egui::Stroke::new(1.0, theme::colors().border_strong),
             egui::StrokeKind::Inside,
         );
     } else if resp.hovered() {
-        painter.rect_filled(rect, 8.0, theme::BG_INPUT);
+        painter.rect_filled(rect, 8.0, theme::colors().bg_input);
     }
 
     let icon_rect = egui::Rect::from_center_size(
@@ -429,17 +513,23 @@ fn tab_widget(ui: &mut egui::Ui, tab: &Tab, active: bool) -> Option<TabWidgetAct
         TabContent::Loading(_) => {
             egui::Spinner::new()
                 .size(12.0)
-                .color(theme::ACCENT)
+                .color(theme::colors().accent)
                 .paint_at(ui, icon_rect);
         }
         TabContent::Browser(_) => {
-            icons::paint(painter, icon_rect, Icon::Search, theme::ACCENT, 2.0);
+            icons::paint(
+                painter,
+                icon_rect,
+                Icon::Search,
+                theme::colors().accent,
+                2.0,
+            );
         }
         TabContent::Repo(_) => {
             let color = if active {
-                theme::ACCENT
+                theme::colors().accent
             } else {
-                theme::TEXT_MUTED
+                theme::colors().text_muted
             };
             icons::paint(painter, icon_rect, Icon::Folder, color, 2.0);
         }
@@ -448,7 +538,7 @@ fn tab_widget(ui: &mut egui::Ui, tab: &Tab, active: bool) -> Option<TabWidgetAct
         icon_rect.right() + 8.0,
         rect.center().y - galley.size().y / 2.0,
     );
-    painter.galley(text_pos, galley, theme::TEXT);
+    painter.galley(text_pos, galley, theme::colors().text);
 
     let close_rect = egui::Rect::from_center_size(
         egui::pos2(rect.right() - 6.0 - 12.0, rect.center().y),
@@ -458,16 +548,17 @@ fn tab_widget(ui: &mut egui::Ui, tab: &Tab, active: bool) -> Option<TabWidgetAct
         .interact(close_rect, resp.id.with("close"), egui::Sense::click())
         .on_hover_text("Cerrar pestaña (Ctrl+W)");
     if close.hovered() {
-        ui.painter().rect_filled(close_rect, 6.0, theme::BG_ACTIVE);
+        ui.painter()
+            .rect_filled(close_rect, 6.0, theme::colors().bg_active);
     }
     icons::paint(
         ui.painter(),
         egui::Rect::from_center_size(close_rect.center(), egui::vec2(12.0, 12.0)),
         Icon::Close,
         if close.hovered() {
-            theme::TEXT
+            theme::colors().text
         } else {
-            theme::TEXT_MUTED
+            theme::colors().text_muted
         },
         2.2,
     );
@@ -510,7 +601,7 @@ impl eframe::App for GitExileApp {
             .exact_height(44.0)
             .frame(
                 egui::Frame::new()
-                    .fill(theme::BG_TABS)
+                    .fill(theme::colors().bg_tabs)
                     .inner_margin(egui::Margin::symmetric(12, 0)),
             )
             .show(ctx, |ui| self.tab_bar(ui));
@@ -571,5 +662,6 @@ impl eframe::App for GitExileApp {
         eframe::set_value(storage, RECENT_KEY, &self.recent);
         eframe::set_value(storage, OPEN_TABS_KEY, &open);
         eframe::set_value(storage, ACTIVE_TAB_KEY, &active);
+        eframe::set_value(storage, THEME_KEY, &theme::current().id());
     }
 }

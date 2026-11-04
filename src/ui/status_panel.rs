@@ -119,7 +119,7 @@ fn section(
         ui.label(
             RichText::new(entries.len().to_string())
                 .size(12.0)
-                .color(theme::TEXT_MUTED),
+                .color(theme::colors().text_muted),
         );
         if entries.is_empty() {
             return;
@@ -140,7 +140,7 @@ fn section(
         });
     });
     if entries.is_empty() {
-        ui.label(RichText::new("Nada").color(theme::TEXT_MUTED));
+        ui.label(RichText::new("Nada").color(theme::colors().text_muted));
     }
     ui.spacing_mut().item_spacing.y = 2.0;
     for entry in entries {
@@ -201,7 +201,7 @@ fn section(
                         vec2(24.0, 24.0),
                     ),
                     |ui: &mut Ui| {
-                        icons::icon_button(ui, Icon::Trash, 24.0, 14.0, theme::TEXT_MUTED)
+                        icons::icon_button(ui, Icon::Trash, 24.0, 14.0, theme::colors().text_muted)
                     },
                 )
                 .on_hover_text("Descartar los cambios…")
@@ -226,9 +226,9 @@ fn small_button(ui: &mut Ui, text: &str) -> egui::Response {
 
 pub fn kind_color(kind: ChangeKind) -> Color32 {
     match kind {
-        ChangeKind::Added | ChangeKind::Untracked => theme::GREEN,
-        ChangeKind::Deleted | ChangeKind::Conflicted => theme::RED,
-        ChangeKind::Modified | ChangeKind::TypeChanged => theme::YELLOW,
-        ChangeKind::Renamed | ChangeKind::Copied => theme::BLUE,
+        ChangeKind::Added | ChangeKind::Untracked => theme::colors().green,
+        ChangeKind::Deleted | ChangeKind::Conflicted => theme::colors().red,
+        ChangeKind::Modified | ChangeKind::TypeChanged => theme::colors().yellow,
+        ChangeKind::Renamed | ChangeKind::Copied => theme::colors().blue,
     }
 }

@@ -43,34 +43,36 @@ struct LineStyle {
 }
 
 fn line_style(kind: LineKind) -> LineStyle {
+    let text = |color| theme::lighten(color, 0.4);
+    let number = |color: Color32| color.lerp_to_gamma(theme::colors().bg, 0.2);
     match kind {
         LineKind::Added => LineStyle {
-            bg: Some(theme::alpha(theme::GREEN, 0.10)),
-            text: Color32::from_rgb(0xA8, 0xEB, 0xCD),
-            number: Color32::from_rgb(0x7D, 0xB8, 0x9D),
+            bg: Some(theme::alpha(theme::colors().green, 0.10)),
+            text: text(theme::colors().green),
+            number: number(theme::colors().green),
             sign: "+",
-            sign_color: theme::GREEN,
+            sign_color: theme::colors().green,
         },
         LineKind::Removed => LineStyle {
-            bg: Some(theme::alpha(theme::RED, 0.10)),
-            text: Color32::from_rgb(0xF7, 0xB2, 0xB2),
-            number: Color32::from_rgb(0xC9, 0x85, 0x85),
+            bg: Some(theme::alpha(theme::colors().red, 0.10)),
+            text: text(theme::colors().red),
+            number: number(theme::colors().red),
             sign: "−",
-            sign_color: theme::RED,
+            sign_color: theme::colors().red,
         },
         LineKind::Context => LineStyle {
             bg: None,
-            text: theme::TEXT_SOFT,
-            number: theme::TEXT_FAINT,
+            text: theme::colors().text_soft,
+            number: theme::colors().text_faint,
             sign: "",
-            sign_color: theme::TEXT_FAINT,
+            sign_color: theme::colors().text_faint,
         },
         LineKind::NoNewline => LineStyle {
             bg: None,
-            text: theme::TEXT_FAINT,
-            number: theme::TEXT_FAINT,
+            text: theme::colors().text_faint,
+            number: theme::colors().text_faint,
             sign: "",
-            sign_color: theme::TEXT_FAINT,
+            sign_color: theme::colors().text_faint,
         },
     }
 }
@@ -136,19 +138,19 @@ pub fn show(ui: &mut Ui, file: &FileDiff) {
         ui.label(
             RichText::new(path)
                 .font(theme::mono(13.0))
-                .color(theme::TEXT),
+                .color(theme::colors().text),
         );
         if !file.binary {
             let (added, removed) = file.stats();
             ui.label(
                 RichText::new(format!("+{added}"))
                     .font(theme::mono(12.0))
-                    .color(theme::GREEN),
+                    .color(theme::colors().green),
             );
             ui.label(
                 RichText::new(format!("−{removed}"))
                     .font(theme::mono(12.0))
-                    .color(theme::RED),
+                    .color(theme::colors().red),
             );
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -174,8 +176,8 @@ pub fn show(ui: &mut Ui, file: &FileDiff) {
     }
 
     egui::Frame::new()
-        .fill(theme::BG_CODE)
-        .stroke(Stroke::new(1.0, theme::BORDER))
+        .fill(theme::colors().bg_code)
+        .stroke(Stroke::new(1.0, theme::colors().border))
         .corner_radius(10)
         .show(ui, |ui| {
             ui.set_min_size(ui.available_size());
@@ -189,8 +191,8 @@ pub fn show(ui: &mut Ui, file: &FileDiff) {
 /// Selector Unificado / Dividido.
 fn segmented(ui: &mut Ui, mode: &mut DiffMode) {
     egui::Frame::new()
-        .fill(theme::BG_INPUT)
-        .stroke(Stroke::new(1.0, theme::BORDER_STRONG))
+        .fill(theme::colors().bg_input)
+        .stroke(Stroke::new(1.0, theme::colors().border_strong))
         .corner_radius(8)
         .inner_margin(3)
         .show(ui, |ui| {
@@ -205,20 +207,25 @@ fn segmented(ui: &mut Ui, mode: &mut DiffMode) {
                     label.to_owned(),
                     theme::font(12.0),
                     if active {
-                        theme::TEXT
+                        theme::colors().text
                     } else {
-                        theme::TEXT_SECONDARY
+                        theme::colors().text_secondary
                     },
                 );
                 let (rect, resp) =
                     ui.allocate_exact_size(vec2(galley.size().x + 20.0, 26.0), Sense::click());
                 if active {
-                    ui.painter().rect_filled(rect, 6.0, theme::BG_ACTIVE);
+                    ui.painter()
+                        .rect_filled(rect, 6.0, theme::colors().bg_active);
                 } else if resp.hovered() {
-                    ui.painter().rect_filled(rect, 6.0, theme::BG_BUTTON);
+                    ui.painter()
+                        .rect_filled(rect, 6.0, theme::colors().bg_button);
                 }
-                ui.painter()
-                    .galley(rect.center() - galley.size() / 2.0, galley, theme::TEXT);
+                ui.painter().galley(
+                    rect.center() - galley.size() / 2.0,
+                    galley,
+                    theme::colors().text,
+                );
                 if resp.clicked() {
                     *mode = value;
                 }
@@ -325,7 +332,7 @@ fn split(ui: &mut Ui, file: &FileDiff) {
                         ui.painter().vline(
                             right.left(),
                             rect.y_range(),
-                            Stroke::new(1.0, theme::BORDER),
+                            Stroke::new(1.0, theme::colors().border),
                         );
                     }
                 }
@@ -337,7 +344,7 @@ fn split(ui: &mut Ui, file: &FileDiff) {
 fn paint_side(painter: &Painter, rect: Rect, line: Option<&DiffLine>, old: bool) {
     let Some(line) = line else {
         // Hueco: no hay línea equivalente en este lado.
-        painter.rect_filled(rect, 0.0, theme::alpha(theme::BG_CARD, 0.6));
+        painter.rect_filled(rect, 0.0, theme::alpha(theme::colors().bg_card, 0.6));
         return;
     };
     // En el lado izquierdo una línea añadida no existe, y viceversa.
@@ -358,7 +365,7 @@ fn paint_header(painter: &Painter, rect: Rect, header: &str) {
         Align2::LEFT_CENTER,
         header,
         theme::mono(FONT_SIZE),
-        theme::ACCENT,
+        theme::colors().accent,
     );
 }
 
@@ -396,7 +403,7 @@ fn paint_code(painter: &Painter, x: f32, y: f32, line: &DiffLine, style: &LineSt
 /// Mensaje centrado para cuando no hay nada que mostrar.
 pub fn placeholder(ui: &mut Ui, text: &str) {
     ui.centered_and_justified(|ui| {
-        ui.label(RichText::new(text).color(theme::TEXT_MUTED));
+        ui.label(RichText::new(text).color(theme::colors().text_muted));
     });
 }
 

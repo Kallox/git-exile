@@ -28,6 +28,8 @@ pub enum Icon {
     ArrowUp,
     Check,
     Trash,
+    /// Controles deslizantes, para las opciones.
+    Sliders,
 }
 
 /// Transforma coordenadas de la cuadrícula 24x24 al rectángulo destino.
@@ -143,6 +145,14 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32, width: f
             );
             line(&[(5.0, 15.0), (5.0, 5.0), (6.0, 3.5), (15.0, 3.5)]);
         }
+        Icon::Sliders => {
+            line(&[(3.0, 7.0), (7.0, 7.0)]);
+            circle(9.0, 7.0, 2.0);
+            line(&[(11.0, 7.0), (21.0, 7.0)]);
+            line(&[(3.0, 17.0), (13.0, 17.0)]);
+            circle(15.0, 17.0, 2.0);
+            line(&[(17.0, 17.0), (21.0, 17.0)]);
+        }
         Icon::Trash => {
             line(&[(4.0, 6.0), (20.0, 6.0)]);
             line(&[(6.0, 6.0), (7.0, 21.0), (17.0, 21.0), (18.0, 6.0)]);
@@ -180,10 +190,11 @@ pub fn show(ui: &mut Ui, icon: Icon, size: f32, color: Color32) -> Response {
 pub fn icon_button(ui: &mut Ui, icon: Icon, size: f32, icon_size: f32, color: Color32) -> Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click());
     if resp.hovered() {
-        ui.painter().rect_filled(rect, 6.0, super::theme::BG_ACTIVE);
+        ui.painter()
+            .rect_filled(rect, 6.0, super::theme::colors().bg_active);
     }
     let color = if resp.hovered() {
-        super::theme::TEXT
+        super::theme::colors().text
     } else {
         color
     };
@@ -211,15 +222,16 @@ pub enum ButtonStyle {
 /// Botón de 34 px de alto con icono a la izquierda, como los del diseño.
 pub fn button(ui: &mut Ui, icon: Icon, text: &str, style: ButtonStyle, enabled: bool) -> Response {
     use super::theme::*;
+    let c = colors();
     let font = if style == ButtonStyle::Primary {
         font_semibold(13.0)
     } else {
         font(13.0)
     };
     let (fg, icon_color) = match style {
-        ButtonStyle::Primary => (TEXT_ON_ACCENT, TEXT_ON_ACCENT),
-        ButtonStyle::Secondary => (TEXT, TEXT),
-        ButtonStyle::Ghost => (TEXT_SECONDARY, TEXT_SECONDARY),
+        ButtonStyle::Primary => (c.text_on_accent, c.text_on_accent),
+        ButtonStyle::Secondary => (c.text, c.text),
+        ButtonStyle::Ghost => (c.text_secondary, c.text_secondary),
     };
     let galley = ui.painter().layout_no_wrap(text.to_owned(), font, fg);
     let height = 34.0;
@@ -240,21 +252,21 @@ pub fn button(ui: &mut Ui, icon: Icon, text: &str, style: ButtonStyle, enabled: 
     let radius = RADIUS as f32;
     match style {
         ButtonStyle::Primary => {
-            let fill = if hovered { LINK } else { ACCENT };
+            let fill = if hovered { c.link } else { c.accent };
             painter.rect_filled(rect, radius, fill);
         }
         ButtonStyle::Secondary => {
             painter.rect(
                 rect,
                 radius,
-                if hovered { BG_ACTIVE } else { BG_BUTTON },
-                Stroke::new(1.0, BORDER_BUTTON),
+                if hovered { c.bg_active } else { c.bg_button },
+                Stroke::new(1.0, c.border_button),
                 egui::StrokeKind::Inside,
             );
         }
         ButtonStyle::Ghost => {
             if hovered {
-                painter.rect_filled(rect, radius, BG_BUTTON);
+                painter.rect_filled(rect, radius, c.bg_button);
             }
         }
     }
@@ -269,7 +281,7 @@ pub fn button(ui: &mut Ui, icon: Icon, text: &str, style: ButtonStyle, enabled: 
     );
     painter.galley(text_pos, galley, fg);
     if !enabled {
-        painter.rect_filled(rect, radius, alpha(BG, 0.5));
+        painter.rect_filled(rect, radius, alpha(c.bg, 0.5));
     }
     resp
 }
