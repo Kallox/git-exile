@@ -12,6 +12,7 @@ pub mod icons;
 pub mod repo_browser;
 pub mod status_panel;
 pub mod theme;
+pub mod update_bar;
 
 use chrono::{Local, TimeZone};
 

@@ -3,9 +3,10 @@
 Cliente gráfico de git escrito en Rust con [egui](https://github.com/emilk/egui).
 
 Permite ver el historial de un repositorio, revisar los cambios de cada commit y crear commits nuevos.
-No usa la API de GitHub, GitLab ni de ningún otro servicio: ejecuta el binario `git` instalado en el sistema,
-por lo que usa tu configuración de git tal cual (`user.name`, `user.email`, hooks, firma GPG/SSH,
-credential helpers, etc.).
+Para trabajar con repositorios no usa la API de GitHub, GitLab ni de ningún otro servicio: ejecuta el binario
+`git` instalado en el sistema, por lo que usa tu configuración de git tal cual (`user.name`, `user.email`, hooks,
+firma GPG/SSH, credential helpers, etc.). Solo se conecta a la API de GitHub para buscar actualizaciones de la
+propia aplicación.
 
 ## Funcionalidades
 
@@ -36,6 +37,7 @@ credential helpers, etc.).
 - Buscador de repositorios integrado: navegar por carpetas, filtrar, buscar repositorios de forma
   recursiva y abrirlos con "Abrir repositorio".
 - Lista de repositorios recientes.
+- Actualización desde la propia aplicación, con verificación de firma.
 
 ## Instalación
 
@@ -54,7 +56,30 @@ Cada versión publica ejecutables en la página de Releases del repositorio; no 
   [Git para Windows](https://git-scm.com/download/win).
 
 Para publicar una versión basta con subir una etiqueta (`git tag v0.1.0 && git push origin v0.1.0`):
-el workflow `.github/workflows/release.yml` pasa los tests, compila ambos ejecutables y crea la Release.
+el workflow `.github/workflows/release.yml` pasa los tests, compila ambos ejecutables, los firma y crea la
+Release.
+
+### Actualizaciones
+
+Al arrancar, la aplicación consulta la última Release de GitHub. Si hay una versión posterior muestra un aviso
+con el botón "Actualizar"; si no la hay o no hay conexión, no muestra nada. También se puede comprobar desde
+"Opciones", con "Buscar actualizaciones". Las compilaciones de desarrollo no comprueban nada al arrancar.
+
+La actualización reemplaza el ejecutable y pide reiniciar; las pestañas abiertas se conservan. Si el ejecutable
+está en una carpeta sin permisos de escritura (como `/usr/bin`), falla y ofrece el enlace para descargarla a
+mano. El repositorio debe ser público: la consulta se hace sin credenciales.
+
+Los archivos de cada Release van firmados con [zipsign](https://github.com/Kijewski/zipsign), y la aplicación
+solo instala los que coinciden con la clave pública `assets/update-signing.pub`. Para publicar hace falta el
+secreto `UPDATE_SIGNING_KEY` en el repositorio, con la clave privada en base64:
+
+```sh
+zipsign gen-key priv.key pub.key   # solo una vez; pub.key va a assets/update-signing.pub
+base64 -w0 priv.key                # valor del secreto
+```
+
+La clave privada no debe subirse al repositorio. Si se pierde, las instalaciones existentes no aceptarán
+versiones firmadas con otra clave y habrá que actualizarlas a mano.
 
 ## Requisitos
 
@@ -171,6 +196,7 @@ src/
 ├── repo_tab.rs          Estado y vista de un repositorio abierto
 ├── browser.rs           Exploración de carpetas y búsqueda de repositorios
 ├── worker.rs            Hilo en segundo plano para las operaciones de git
+├── update.rs            Búsqueda e instalación de actualizaciones
 ├── git/                 Acceso a git (no depende de la interfaz)
 │   ├── runner.rs        Ejecución del binario git y manejo de errores
 │   ├── repo.rs          Apertura del repositorio, rama actual
@@ -193,6 +219,7 @@ src/
     ├── commit_editor.rs
     ├── branch_dialog.rs Diálogo de nueva rama
     ├── connect_remote_dialog.rs Diálogo para conectar un remoto
+    ├── update_bar.rs    Aviso de versión nueva y progreso de la actualización
     ├── theme.rs         Temas de color, fuentes y estilo global
     ├── icons.rs         Iconos vectoriales y botones
     └── repo_browser.rs  Buscador de repositorios
