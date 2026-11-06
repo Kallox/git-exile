@@ -41,6 +41,12 @@ pub fn list_remotes(repo: &Repo) -> Result<Vec<Remote>> {
 
 /// Conecta el repositorio a `url` con el remoto `origin`.
 pub fn connect_remote(repo: &Repo, url: &str) -> Result<()> {
+    let url = valid_url(url)?;
+    repo.git(&["remote", "add", "--", "origin", url]).map(drop)
+}
+
+/// Quita los espacios de `url` y la rechaza si no se puede usar como dirección.
+pub(super) fn valid_url(url: &str) -> Result<&str> {
     let url = url.trim();
     // Git lo interpretaría como una opción al usar el remoto.
     if url.is_empty() || url.starts_with('-') {
@@ -48,7 +54,7 @@ pub fn connect_remote(repo: &Repo, url: &str) -> Result<()> {
             "\"{url}\" no es una dirección válida"
         )));
     }
-    repo.git(&["remote", "add", "--", "origin", url]).map(drop)
+    Ok(url)
 }
 
 /// `git remote -v` da una línea `nombre\turl (fetch)` y otra `(push)` por remoto.

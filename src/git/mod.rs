@@ -4,6 +4,7 @@
 
 mod branch;
 mod commit;
+mod create;
 mod details;
 mod diff;
 mod graph;
@@ -23,6 +24,7 @@ pub use commit::{
     author_ident, create_commit, discard, last_commit_message, stage, stage_all, unstage,
     unstage_all,
 };
+pub use create::{NewRepo, repo_name_from_url};
 pub use details::{CommitDetails, Person, load_commit};
 pub use diff::{DiffLine, FileDiff, FileStatus, Hunk, LineKind};
 pub use graph::{Graph, GraphRow, Half};

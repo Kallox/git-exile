@@ -87,11 +87,15 @@ pub fn run_with_stdin<S: AsRef<OsStr>>(dir: &Path, args: &[S], input: &[u8]) -> 
     check(args, output)
 }
 
+/// Ejecuta `git <args>` sin entrar en ninguna carpeta. Las rutas de `args` deben ser absolutas.
+pub fn run_anywhere<S: AsRef<OsStr>>(args: &[S]) -> Result<String> {
+    let output = command(None, args).output()?;
+    check(args, output)
+}
+
 /// Versión del git instalado, p. ej. `git version 2.55.0`.
 pub fn version() -> Result<String> {
-    let args = ["--version"];
-    let output = command(None, &args).output()?;
-    check(&args, output).map(|s| s.trim().to_owned())
+    run_anywhere(&["--version"]).map(|s| s.trim().to_owned())
 }
 
 #[cfg(test)]

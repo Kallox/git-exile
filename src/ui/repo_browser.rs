@@ -8,8 +8,10 @@ use std::sync::mpsc::{self, Receiver};
 use eframe::egui::{self, Align, Color32, Key, Layout, RichText, ScrollArea, TextEdit, Ui};
 
 use super::icons::{self, ButtonStyle, Icon};
+use super::new_repo_dialog::{NewRepoAction, NewRepoDialog};
 use super::theme;
 use crate::browser::{self, DirEntry};
+use crate::git::NewRepo;
 
 /// Profundidad máxima de la búsqueda recursiva.
 const SEARCH_DEPTH: usize = 5;
@@ -20,6 +22,7 @@ fn repo_color() -> Color32 {
 
 pub enum BrowserAction {
     Open(PathBuf),
+    Create(NewRepo),
 }
 
 enum SearchEvent {
@@ -86,6 +89,7 @@ pub struct RepoBrowser {
     show_hidden: bool,
     selected: Option<PathBuf>,
     search: Option<Search>,
+    dialog: Option<NewRepoDialog>,
 }
 
 impl RepoBrowser {
@@ -98,8 +102,16 @@ impl RepoBrowser {
             show_hidden: false,
             selected: None,
             search: None,
+            dialog: None,
         };
         browser.navigate(start);
+        browser
+    }
+
+    /// Buscador en `start` con el diálogo de `new` abierto, mostrando por qué falló.
+    pub fn with_failed(start: PathBuf, new: NewRepo, error: String) -> Self {
+        let mut browser = Self::new(start);
+        browser.dialog = Some(NewRepoDialog::failed(new, &browser.current, error));
         browser
     }
 
@@ -143,6 +155,21 @@ impl RepoBrowser {
                         .font(theme::font_semibold(16.0))
                         .color(theme::colors().text),
                 );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if icons::button(ui, Icon::Plus, "Nuevo repositorio…", ButtonStyle::Secondary, true)
+                        .on_hover_text("Crear un repositorio en esta carpeta o en la seleccionada")
+                        .clicked()
+                    {
+                        let target = self.selected.as_deref().unwrap_or(&self.current);
+                        self.dialog = Some(NewRepoDialog::init(target));
+                    }
+                    if icons::button(ui, Icon::Cloud, "Clonar…", ButtonStyle::Secondary, true)
+                        .on_hover_text("Descargar un repositorio remoto dentro de esta carpeta")
+                        .clicked()
+                    {
+                        self.dialog = Some(NewRepoDialog::clone_into(&self.current));
+                    }
+                });
             });
             ui.add_space(4.0);
             ui.horizontal(|ui| {
@@ -385,6 +412,13 @@ impl RepoBrowser {
 
         if let Some(path) = navigate {
             self.navigate(path);
+        }
+        if let Some(dialog) = &mut self.dialog {
+            match dialog.show(ui.ctx()) {
+                Some(NewRepoAction::Create(new)) => action = Some(BrowserAction::Create(new)),
+                Some(NewRepoAction::Cancel) => self.dialog = None,
+                None => {}
+            }
         }
         action
     }

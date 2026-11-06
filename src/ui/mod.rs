@@ -9,6 +9,7 @@ pub mod diff_view;
 pub mod discard_dialog;
 pub mod graph_view;
 pub mod icons;
+pub mod new_repo_dialog;
 pub mod repo_browser;
 pub mod status_panel;
 pub mod theme;

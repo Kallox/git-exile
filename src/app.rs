@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use eframe::egui::{self, Key, Modifiers};
 
 use crate::browser;
-use crate::git::{self, Repo};
+use crate::git::{self, NewRepo, Repo};
 use crate::repo_tab::{Jobs, RepoMessage, RepoTab};
 use crate::ui::icons::{self, ButtonStyle, Icon};
 use crate::ui::repo_browser::{BrowserAction, RepoBrowser};
@@ -24,8 +24,13 @@ pub struct Message {
     pub kind: MessageKind,
 }
 
+/// Repositorio listo para mostrarse, con su rama actual.
+type OpenedRepo = (Repo, Option<String>);
+
 pub enum MessageKind {
-    Opened(git::Result<(Repo, Option<String>)>),
+    Opened(git::Result<OpenedRepo>),
+    /// Terminó la creación de la pestaña `TabContent::Creating`.
+    Created(git::Result<OpenedRepo>),
     Repo(RepoMessage),
 }
 
@@ -34,6 +39,11 @@ enum TabContent {
     Browser(Box<RepoBrowser>),
     /// Abriendo el repositorio de esta ruta.
     Loading(PathBuf),
+    /// Creando o clonando un repositorio desde el buscador en la carpeta `start`.
+    Creating {
+        new: NewRepo,
+        start: PathBuf,
+    },
     Repo(Box<RepoTab>),
 }
 
@@ -46,10 +56,12 @@ impl Tab {
     fn title(&self) -> String {
         match &self.content {
             TabContent::Browser(_) => "Abrir repositorio".to_owned(),
-            TabContent::Loading(path) => path
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| path.display().to_string()),
+            TabContent::Loading(_) | TabContent::Creating { .. } => {
+                let path = self.path();
+                path.file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| path.display().to_string())
+            }
             TabContent::Repo(repo) => repo.name(),
         }
     }
@@ -58,6 +70,7 @@ impl Tab {
         match &self.content {
             TabContent::Browser(b) => b.current(),
             TabContent::Loading(path) => path,
+            TabContent::Creating { new, .. } => new.path(),
             TabContent::Repo(repo) => repo.repo.root(),
         }
     }
@@ -67,6 +80,8 @@ pub struct GitExileApp {
     worker: Worker<Message>,
     /// Hilo aparte para fetch, pull y push.
     network: Worker<Message>,
+    /// Hilo aparte para clonar: tarda mucho y no debe retrasar los fetch de las pestañas.
+    clones: Worker<Message>,
     updater: Updater,
     /// Si la ventana tenía el foco en el frame anterior.
     focused: bool,
@@ -100,6 +115,7 @@ impl GitExileApp {
         let mut app = Self {
             worker: Worker::new(cc.egui_ctx.clone()),
             network: Worker::new(cc.egui_ctx.clone()),
+            clones: Worker::new(cc.egui_ctx.clone()),
             updater: Updater::new(cc.egui_ctx.clone()),
             focused: true,
             next_id: 0,
@@ -186,6 +202,28 @@ impl GitExileApp {
         });
     }
 
+    /// Crea `new` y lo abre reemplazando la pestaña `index` (el buscador desde el que se pidió).
+    fn create_in(&mut self, index: usize, new: NewRepo) {
+        let tab = &mut self.tabs[index];
+        let id = tab.id;
+        let start = tab.path().to_path_buf();
+        tab.content = TabContent::Creating {
+            new: new.clone(),
+            start,
+        };
+        let worker = match new {
+            NewRepo::Init { .. } => &mut self.worker,
+            NewRepo::Clone { .. } => &mut self.clones,
+        };
+        worker.spawn(move || Message {
+            tab: id,
+            kind: MessageKind::Created(new.create().and_then(|repo| {
+                let branch = repo.current_branch()?;
+                Ok((repo, branch))
+            })),
+        });
+    }
+
     /// Abre una pestaña con el buscador de repositorios.
     fn new_browser_tab(&mut self) {
         // Empezar junto al repositorio activo, o en la carpeta personal.
@@ -239,12 +277,14 @@ impl GitExileApp {
     fn handle_messages(&mut self) {
         let mut done = self.worker.poll();
         done.extend(self.network.poll());
+        done.extend(self.clones.poll());
         for msg in done {
             let Some(index) = self.tabs.iter().position(|t| t.id == msg.tab) else {
                 continue;
             };
             match msg.kind {
-                MessageKind::Opened(Ok((repo, branch))) => {
+                MessageKind::Opened(Ok((repo, branch)))
+                | MessageKind::Created(Ok((repo, branch))) => {
                     let root = repo.root().to_path_buf();
                     self.recent.retain(|p| p != &root);
                     self.recent.insert(0, root.clone());
@@ -283,6 +323,13 @@ impl GitExileApp {
                     };
                     self.tabs[index].content =
                         TabContent::Browser(Box::new(RepoBrowser::new(start)));
+                }
+                MessageKind::Created(Err(e)) => {
+                    if let TabContent::Creating { new, start } = &self.tabs[index].content {
+                        let browser =
+                            RepoBrowser::with_failed(start.clone(), new.clone(), e.to_string());
+                        self.tabs[index].content = TabContent::Browser(Box::new(browser));
+                    }
                 }
                 MessageKind::Repo(repo_msg) => {
                     let tab = &mut self.tabs[index];
@@ -545,7 +592,7 @@ fn tab_widget(ui: &mut egui::Ui, tab: &Tab, active: bool) -> Option<TabWidgetAct
         egui::vec2(14.0, 14.0),
     );
     match &tab.content {
-        TabContent::Loading(_) => {
+        TabContent::Loading(_) | TabContent::Creating { .. } => {
             egui::Spinner::new()
                 .size(12.0)
                 .color(theme::colors().accent)
@@ -642,7 +689,7 @@ impl eframe::App for GitExileApp {
             )
             .show(ctx, |ui| self.tab_bar(ui));
         self.error_bar(ctx);
-        let busy = self.worker.is_busy() || self.network.is_busy();
+        let busy = self.worker.is_busy() || self.network.is_busy() || self.clones.is_busy();
         update_bar::show(ctx, &mut self.updater, busy);
 
         let mut browser_action = None;
@@ -668,6 +715,17 @@ impl eframe::App for GitExileApp {
                             ui.label(format!("Abriendo {}…", path.display()));
                         });
                     }
+                    TabContent::Creating { new, .. } => {
+                        let path = new.path().display();
+                        let text = match new {
+                            NewRepo::Init { .. } => format!("Creando repositorio en {path}…"),
+                            NewRepo::Clone { .. } => format!(
+                                "Clonando en {path}…\nPuede tardar; mientras tanto puedes usar \
+                                 otras pestañas. Si cierras esta, la descarga sigue y no se abrirá."
+                            ),
+                        };
+                        ui.centered_and_justified(|ui| ui.label(text));
+                    }
                     TabContent::Repo(repo) => {
                         let mut jobs = Jobs {
                             worker: &mut self.worker,
@@ -679,18 +737,26 @@ impl eframe::App for GitExileApp {
                     }
                 }
             });
-        if let Some(BrowserAction::Open(path)) = browser_action {
-            self.open_in(self.active, path);
+        match browser_action {
+            Some(BrowserAction::Open(path)) => self.open_in(self.active, path),
+            Some(BrowserAction::Create(new)) => self.create_in(self.active, new),
+            None => {}
         }
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        // Los buscadores no se guardan: solo los repositorios.
+        // Los buscadores no se guardan: solo los repositorios. Tampoco lo que aún se
+        // está creando, que al volver a abrir podría no existir.
         let repos: Vec<(usize, PathBuf)> = self
             .tabs
             .iter()
             .enumerate()
-            .filter(|(_, t)| !matches!(t.content, TabContent::Browser(_)))
+            .filter(|(_, t)| {
+                !matches!(
+                    t.content,
+                    TabContent::Browser(_) | TabContent::Creating { .. }
+                )
+            })
             .map(|(i, t)| (i, t.path().to_path_buf()))
             .collect();
         let active = repos

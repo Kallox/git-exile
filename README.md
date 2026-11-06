@@ -36,6 +36,7 @@ propia aplicación.
 - Varios repositorios abiertos a la vez en pestañas. Las pestañas abiertas se recuerdan entre sesiones.
 - Buscador de repositorios integrado: navegar por carpetas, filtrar, buscar repositorios de forma
   recursiva y abrirlos con "Abrir repositorio".
+- Clonar repositorios remotos e inicializar repositorios nuevos desde el buscador.
 - Lista de repositorios recientes.
 - Actualización desde la propia aplicación, con verificación de firma.
 
@@ -116,7 +117,16 @@ El botón "+" de la barra de pestañas (o Ctrl+T) abre el buscador en una pesta�
   en carpetas ocultas ni en `node_modules`, `target`, etc.).
 - "Abrir repositorio" abre la carpeta seleccionada, o la actual si es (o está dentro de) un repositorio.
 
+- "Clonar…" descarga un repositorio dentro de la carpeta actual. El destino se deduce de la dirección y se
+  puede cambiar; debe no existir o estar vacío.
+- "Nuevo repositorio…" crea un repositorio en la carpeta seleccionada o en la actual. Si no existe se crea, y
+  si tiene archivos se conservan, sin añadir. La rama inicial es la de tu `init.defaultBranch`.
+
 En el panel izquierdo están los repositorios abiertos y los recientes para abrirlos directamente.
+
+Mientras se clona se pueden usar las demás pestañas. Clonar usa las mismas credenciales que Fetch y Pull, con
+las mismas limitaciones (ver [Sincronizar con el remoto](#sincronizar-con-el-remoto)). No se puede cancelar:
+si cierras la pestaña, la descarga sigue en segundo plano y el repositorio no se abre al terminar.
 
 ### Ramas
 
@@ -204,6 +214,7 @@ src/
 │   ├── graph.rs         Cálculo de carriles del grafo
 │   ├── details.rs       Detalles de un commit
 │   ├── diff.rs          Parser de diffs unificados
+│   ├── create.rs        Inicializar y clonar repositorios
 │   ├── branch.rs        Listar, crear y cambiar de rama, checkout de commits
 │   ├── remote.rs        Remotos y servicio en el que están alojados
 │   ├── sync.rs          Fetch, pull y push
@@ -219,6 +230,7 @@ src/
     ├── commit_editor.rs
     ├── branch_dialog.rs Diálogo de nueva rama
     ├── connect_remote_dialog.rs Diálogo para conectar un remoto
+    ├── new_repo_dialog.rs Diálogo para clonar o crear un repositorio
     ├── update_bar.rs    Aviso de versión nueva y progreso de la actualización
     ├── theme.rs         Temas de color, fuentes y estilo global
     ├── icons.rs         Iconos vectoriales y botones
