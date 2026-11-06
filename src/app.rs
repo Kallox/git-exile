@@ -7,8 +7,7 @@ use crate::git::{self, NewRepo, Repo};
 use crate::repo_tab::{Jobs, RepoMessage, RepoTab};
 use crate::ui::icons::{self, ButtonStyle, Icon};
 use crate::ui::repo_browser::{BrowserAction, RepoBrowser};
-use crate::ui::{theme, update_bar};
-use crate::update::{self, Updater};
+use crate::ui::theme;
 use crate::worker::Worker;
 
 const RECENT_KEY: &str = "recent_repositories";
@@ -82,7 +81,6 @@ pub struct GitExileApp {
     network: Worker<Message>,
     /// Hilo aparte para clonar: tarda mucho y no debe retrasar los fetch de las pestañas.
     clones: Worker<Message>,
-    updater: Updater,
     /// Si la ventana tenía el foco en el frame anterior.
     focused: bool,
     next_id: u64,
@@ -116,7 +114,6 @@ impl GitExileApp {
             worker: Worker::new(cc.egui_ctx.clone()),
             network: Worker::new(cc.egui_ctx.clone()),
             clones: Worker::new(cc.egui_ctx.clone()),
-            updater: Updater::new(cc.egui_ctx.clone()),
             focused: true,
             next_id: 0,
             tabs: Vec::new(),
@@ -124,11 +121,6 @@ impl GitExileApp {
             recent,
             error: None,
         };
-
-        // Una compilación de desarrollo no debe reemplazarse sola.
-        if !cfg!(debug_assertions) {
-            app.updater.check(false);
-        }
 
         if let Err(e) = git::version() {
             app.error = Some(format!("No se encontró git en el PATH: {e}"));
@@ -406,7 +398,7 @@ impl GitExileApp {
                 });
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                options_menu(ui, &mut self.updater);
+                options_menu(ui);
                 let recent = icons::button(ui, Icon::Clock, "Recientes", ButtonStyle::Ghost, true);
                 egui::Popup::menu(&recent).show(|ui| {
                     ui.set_min_width(320.0);
@@ -471,7 +463,7 @@ impl GitExileApp {
 }
 
 /// Botón de opciones con su desplegable.
-fn options_menu(ui: &mut egui::Ui, updater: &mut Updater) {
+fn options_menu(ui: &mut egui::Ui) {
     let button = icons::button(ui, Icon::Sliders, "Opciones", ButtonStyle::Ghost, true);
     // Sigue abierto al elegir, para poder comparar los temas.
     egui::Popup::menu(&button)
@@ -487,25 +479,6 @@ fn options_menu(ui: &mut egui::Ui, updater: &mut Updater) {
                 if theme_row(ui, option).clicked() {
                     theme::set(ui.ctx(), option);
                 }
-            }
-            ui.separator();
-            ui.label(
-                egui::RichText::new("VERSIÓN")
-                    .font(theme::font_semibold(11.0))
-                    .color(theme::colors().text_muted),
-            );
-            ui.label(format!("git-exile v{}", update::CURRENT_VERSION));
-            if updater.is_supported()
-                && icons::button(
-                    ui,
-                    Icon::Refresh,
-                    "Buscar actualizaciones",
-                    ButtonStyle::Secondary,
-                    updater.can_check(),
-                )
-                .clicked()
-            {
-                updater.check(true);
             }
         });
 }
@@ -665,7 +638,6 @@ fn same_path(a: &Path, b: &Path) -> bool {
 impl eframe::App for GitExileApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.handle_messages();
-        self.updater.poll();
         self.keyboard(ctx);
         // Sin pestañas se muestra el buscador.
         if self.tabs.is_empty() {
@@ -689,8 +661,6 @@ impl eframe::App for GitExileApp {
             )
             .show(ctx, |ui| self.tab_bar(ui));
         self.error_bar(ctx);
-        let busy = self.worker.is_busy() || self.network.is_busy() || self.clones.is_busy();
-        update_bar::show(ctx, &mut self.updater, busy);
 
         let mut browser_action = None;
         let recent = &self.recent;

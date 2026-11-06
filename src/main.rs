@@ -6,7 +6,6 @@ mod browser;
 mod git;
 mod repo_tab;
 mod ui;
-mod update;
 mod worker;
 
 use std::path::PathBuf;
@@ -33,13 +32,11 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
 
-    let result = eframe::run_native(
+    eframe::run_native(
         "git-exile",
         options,
         Box::new(|cc| Ok(Box::new(GitExileApp::new(cc, paths)))),
-    );
-    update::relaunch_if_requested();
-    result
+    )
 }
 
 #[cfg(test)]
