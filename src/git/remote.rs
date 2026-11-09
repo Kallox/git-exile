@@ -13,12 +13,52 @@ pub enum Hosting {
     Disk,
 }
 
+/// Cómo se conecta git con el remoto.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Protocol {
+    /// `git@host:ruta` o `ssh://`: usa tu clave SSH.
+    Ssh,
+    /// Usa usuario y token (o un credential helper).
+    Https,
+    /// Sin cifrar.
+    Http,
+    /// `git://`: solo lectura y sin cifrar.
+    Git,
+    /// Una carpeta de este equipo.
+    Local,
+}
+
+impl Protocol {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Ssh => "SSH",
+            Self::Https => "HTTPS",
+            Self::Http => "HTTP",
+            Self::Git => "git://",
+            Self::Local => "local",
+        }
+    }
+
+    /// Qué credenciales usa, para explicarlo en la interfaz.
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Ssh => "SSH: se conecta con tu clave SSH",
+            Self::Https => "HTTPS: se conecta con usuario y token",
+            Self::Http => "HTTP: sin cifrar",
+            Self::Git => "git://: solo lectura, sin cifrar",
+            Self::Local => "carpeta de este equipo",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Remote {
     pub name: String,
     /// Dirección para mostrar, sin credenciales.
     pub url: String,
     pub hosting: Hosting,
+    /// Protocolo de la dirección de fetch.
+    pub protocol: Protocol,
 }
 
 impl Remote {
@@ -68,6 +108,7 @@ fn parse_remotes(output: &str) -> Vec<Remote> {
                 name: name.to_owned(),
                 url: strip_credentials(url),
                 hosting: classify(url),
+                protocol: protocol(url),
             })
         })
         .collect()
@@ -85,6 +126,21 @@ fn classify(url: &str) -> Hosting {
         Hosting::GitLab
     } else {
         Hosting::Other(host.to_owned())
+    }
+}
+
+fn protocol(url: &str) -> Protocol {
+    match url.split_once("://") {
+        Some((scheme, _)) => match scheme.to_ascii_lowercase().as_str() {
+            "ssh" | "git+ssh" | "ssh+git" => Protocol::Ssh,
+            "https" => Protocol::Https,
+            "http" => Protocol::Http,
+            "git" => Protocol::Git,
+            _ => Protocol::Local,
+        },
+        // La forma corta `usuario@host:ruta` es SSH; lo demás, una ruta.
+        None if host(url).is_some() => Protocol::Ssh,
+        None => Protocol::Local,
     }
 }
 
@@ -149,6 +205,25 @@ mod tests {
     }
 
     #[test]
+    fn detects_protocol_from_url() {
+        for (url, expected) in [
+            ("git@github.com:a/b.git", Protocol::Ssh),
+            ("git@github-trabajo:a/b.git", Protocol::Ssh),
+            ("ssh://git@ssh.github.com:443/a/b.git", Protocol::Ssh),
+            ("git+ssh://git@gitlab.com/a/b", Protocol::Ssh),
+            ("https://gitlab.com/a/b", Protocol::Https),
+            ("HTTPS://gitlab.com/a/b", Protocol::Https),
+            ("http://git.empresa.com/a/b", Protocol::Http),
+            ("git://git.kernel.org/a/b.git", Protocol::Git),
+            ("/srv/git/b.git", Protocol::Local),
+            ("C:\\repos\\b.git", Protocol::Local),
+            ("file:///srv/git/b.git", Protocol::Local),
+        ] {
+            assert_eq!(protocol(url), expected, "{url}");
+        }
+    }
+
+    #[test]
     fn hides_credentials_of_http_urls() {
         assert_eq!(
             strip_credentials("https://user:token@github.com/a/b.git"),
@@ -178,7 +253,9 @@ mod tests {
         let remotes = parse_remotes(output);
         assert_eq!(remotes.len(), 2);
         assert_eq!(remotes[0].hosting_label(), "GitHub");
+        assert_eq!(remotes[0].protocol, Protocol::Ssh);
         assert_eq!(remotes[1].name, "parcial");
+        assert_eq!(remotes[1].protocol, Protocol::Https);
         assert_eq!(remotes[1].url, "https://gitlab.com/a/b");
         assert_eq!(remotes[1].hosting_label(), "GitLab");
     }

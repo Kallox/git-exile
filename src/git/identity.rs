@@ -6,6 +6,8 @@
 use serde::{Deserialize, Serialize};
 
 use super::commit::author_ident;
+#[cfg(test)]
+use super::remote::Protocol;
 use super::remote::{Hosting, Remote};
 use super::repo::Repo;
 use super::runner::{GitError, Result};
@@ -408,6 +410,7 @@ mod tests {
             name: "origin".into(),
             url: String::new(),
             hosting,
+            protocol: Protocol::Ssh,
         };
         let found = |hosting| suggested_profile(&profiles, &[remote(hosting)]).map(|(i, _)| i);
         assert_eq!(found(Hosting::GitLab), Some(2));

@@ -13,8 +13,8 @@ credential helpers, etc.).
 - Columna con la rama de cada commit: la punta de cada rama siempre visible y, al pasar el ratón, la rama
   de los commits anteriores (más transparente). Se deduce siguiendo el primer padre y los mensajes de merge.
 - Etiquetas de ramas, ramas remotas, tags y HEAD en cada commit.
-- Indicador de dónde está alojado el repositorio (GitHub, GitLab, otro servidor o solo local), deducido de
-  sus remotos.
+- Indicador de dónde está alojado el repositorio (GitHub, GitLab, otro servidor o solo local) y de cómo se
+  conecta (SSH, HTTPS...), deducido de sus remotos.
 - Carga paginada del historial, pensada para repositorios grandes.
 - Detalles del commit: autor, committer, mensaje completo, padres y archivos cambiados.
 - Búsqueda de commits por mensaje, autor, correo o hash.

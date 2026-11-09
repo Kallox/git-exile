@@ -1210,7 +1210,7 @@ fn hosting_chip(ui: &mut egui::Ui, remotes: &[git::Remote]) {
     } else {
         let hint: Vec<String> = remotes
             .iter()
-            .map(|r| format!("{}: {}", r.name, r.url))
+            .map(|r| format!("{}: {}\n    {}", r.name, r.url, r.protocol.description()))
             .collect();
         (Icon::Cloud, hosting_text(remotes), hint.join("\n"))
     };
@@ -1237,11 +1237,15 @@ fn hosting_chip(ui: &mut egui::Ui, remotes: &[git::Remote]) {
         .on_hover_text(hint);
 }
 
-/// Servicios de los remotos, sin repetir, en el orden de la lista.
+/// Servicio y protocolo de cada remoto, sin repetir, en el orden de la lista.
 fn hosting_text(remotes: &[git::Remote]) -> String {
-    let mut labels: Vec<&str> = Vec::new();
+    let mut labels: Vec<String> = Vec::new();
     for remote in remotes {
-        let label = remote.hosting_label();
+        let label = match remote.protocol {
+            // "Remoto en disco" ya dice que es local.
+            git::Protocol::Local => remote.hosting_label().to_owned(),
+            protocol => format!("{} ({})", remote.hosting_label(), protocol.label()),
+        };
         if !labels.contains(&label) {
             labels.push(label);
         }
@@ -1522,17 +1526,22 @@ mod tests {
 
     #[test]
     fn hosting_text_lists_each_service_once() {
-        let remote = |name: &str, hosting| git::Remote {
+        let remote = |name: &str, hosting, protocol| git::Remote {
             name: name.into(),
             url: String::new(),
             hosting,
+            protocol,
         };
         let remotes = [
-            remote("origin", git::Hosting::GitHub),
-            remote("fork", git::Hosting::GitHub),
-            remote("copia", git::Hosting::GitLab),
+            remote("origin", git::Hosting::GitHub, git::Protocol::Ssh),
+            remote("fork", git::Hosting::GitHub, git::Protocol::Ssh),
+            remote("copia", git::Hosting::GitLab, git::Protocol::Https),
+            remote("disco", git::Hosting::Disk, git::Protocol::Local),
         ];
-        assert_eq!(hosting_text(&remotes), "GitHub · GitLab");
+        assert_eq!(
+            hosting_text(&remotes),
+            "GitHub (SSH) · GitLab (HTTPS) · Remoto en disco"
+        );
     }
 
     #[test]

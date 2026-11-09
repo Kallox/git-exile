@@ -35,7 +35,7 @@ pub use identity::{
 pub use log::{Commit, RefKind, RefLabel, load_log};
 #[cfg(test)]
 pub use remote::Hosting;
-pub use remote::{Remote, connect_remote, list_remotes};
+pub use remote::{Protocol, Remote, connect_remote, list_remotes};
 pub use repo::Repo;
 #[cfg(test)]
 pub use runner::run;
