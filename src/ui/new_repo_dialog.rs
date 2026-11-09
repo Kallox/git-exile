@@ -254,7 +254,9 @@ mod tests {
         frame(&ctx, &mut dialog, Vec::new());
         let url = "git@github.com:usuario/proyecto.git";
         frame(&ctx, &mut dialog, vec![Event::Text(url.to_owned())]);
-        assert_eq!(dialog.path, "/tmp/repos/proyecto");
+        // En Windows `join` usa `\`: se construye igual que en el diálogo.
+        let expected = Path::new("/tmp/repos").join("proyecto");
+        assert_eq!(dialog.path, expected.display().to_string());
 
         let action = frame(&ctx, &mut dialog, vec![key(Key::Enter)]);
         match action {
@@ -262,7 +264,7 @@ mod tests {
                 new,
                 NewRepo::Clone {
                     url: url.to_owned(),
-                    path: PathBuf::from("/tmp/repos/proyecto"),
+                    path: expected,
                 }
             ),
             _ => panic!("Enter debería lanzar la clonación"),
