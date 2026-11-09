@@ -29,8 +29,8 @@ pub use details::{CommitDetails, Person, load_commit};
 pub use diff::{DiffLine, FileDiff, FileStatus, Hunk, LineKind};
 pub use graph::{Graph, GraphRow, Half};
 pub use identity::{
-    Identity, Profile, Service, SigningFormat, apply_profile, clear_local_identity, identity,
-    suggested_profile,
+    Identity, Profile, Service, SigningFormat, apply_profile, auto_profile, clear_local_identity,
+    identity, suggested_profile,
 };
 pub use log::{Commit, RefKind, RefLabel, load_log};
 #[cfg(test)]

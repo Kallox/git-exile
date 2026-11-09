@@ -143,6 +143,10 @@ pub struct RepoTab {
     editor: CommitEditor,
     /// Identidad con la que se harán los commits y de dónde sale.
     identity: Option<git::Identity>,
+    /// Ya se revisó si había que aplicar un perfil al abrir el repositorio.
+    auto_profile_checked: bool,
+    /// Aviso de que se aplicó un perfil automáticamente.
+    auto_profile_notice: Option<String>,
     /// Huella de ramas/tags/HEAD de la última lectura del estado.
     refs: Option<String>,
     /// Commit a volver a seleccionar cuando se recargue el historial.
@@ -183,6 +187,8 @@ impl RepoTab {
             wt_diff: None,
             editor: CommitEditor::default(),
             identity: None,
+            auto_profile_checked: false,
+            auto_profile_notice: None,
             refs: None,
             reselect: None,
             error: None,
@@ -358,7 +364,10 @@ impl RepoTab {
             Action::ApplyProfile(profile) => {
                 self.run_op(jobs, move |repo| git::apply_profile(repo, &profile));
             }
-            Action::UseGlobalIdentity => self.run_op(jobs, git::clear_local_identity),
+            Action::UseGlobalIdentity => {
+                self.auto_profile_notice = None;
+                self.run_op(jobs, git::clear_local_identity);
+            }
             Action::Refresh => self.refresh_status(jobs),
             // Lo atiende `ui`, que se lo pasa a la aplicación.
             Action::ManageProfiles => {}
@@ -643,9 +652,30 @@ impl RepoTab {
         }
     }
 
+    /// Al abrir el repositorio, aplica el perfil de su servicio si corresponde. Se revisa
+    /// una sola vez, cuando ya se conocen la identidad y los remotos.
+    fn check_auto_profile(&mut self, profiles: &[git::Profile], actions: &mut Vec<Action>) {
+        if self.auto_profile_checked {
+            return;
+        }
+        let (Some(identity), Some(remotes)) = (&self.identity, &self.remotes) else {
+            return;
+        };
+        self.auto_profile_checked = true;
+        if let Some(profile) = git::auto_profile(identity, profiles, remotes) {
+            self.auto_profile_notice = Some(format!(
+                "Se aplicó el perfil {} a este repositorio por estar en {}",
+                profile.label(),
+                profile.service.map_or("su servicio", git::Service::label),
+            ));
+            actions.push(Action::ApplyProfile(profile.clone()));
+        }
+    }
+
     /// Dibuja la pestaña completa. Devuelve `true` si se pidió administrar los perfiles.
     pub fn ui(&mut self, ui: &mut egui::Ui, jobs: &mut Jobs, profiles: &[git::Profile]) -> bool {
         let mut actions = Vec::new();
+        self.check_auto_profile(profiles, &mut actions);
         egui::TopBottomPanel::top("repo_toolbar")
             .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(20, 12)))
             .show_inside(ui, |ui| {
@@ -1074,6 +1104,7 @@ impl RepoTab {
                             identity: self.identity.as_ref(),
                             profiles,
                             suggested: git::suggested_profile(profiles, remotes),
+                            notice: self.auto_profile_notice.as_deref(),
                         };
                         match self.editor.show(ui, cx) {
                             Some(EditorAction::Commit {

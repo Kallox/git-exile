@@ -12,6 +12,10 @@ use super::remote::{Hosting, Remote};
 use super::repo::Repo;
 use super::runner::{GitError, Result};
 
+/// Clave local que vale `false` cuando se eligió la identidad global en el repositorio:
+/// entonces no se le aplica ningún perfil de forma automática.
+const AUTO_PROFILE_KEY: &str = "gitexile.autoprofile";
+
 /// Claves que escribe un perfil y que se borran al volver a la identidad global.
 const PROFILE_KEYS: [&str; 5] = [
     "user.name",
@@ -117,9 +121,15 @@ impl Profile {
         }
     }
 
-    /// `true` si es la identidad `email` (sin distinguir mayúsculas).
-    pub fn has_email(&self, email: &str) -> bool {
-        self.email.trim().eq_ignore_ascii_case(email.trim())
+    /// `true` si git creará los commits tal como los crearía este perfil: mismo nombre,
+    /// mismo correo (sin distinguir mayúsculas) y firmados o no según el perfil.
+    pub fn is_active(&self, identity: &Identity) -> bool {
+        identity.name() == Some(self.name.trim())
+            && identity
+                .email
+                .as_deref()
+                .is_some_and(|e| self.email.trim().eq_ignore_ascii_case(e.trim()))
+            && self.sign == identity.signing.is_some()
     }
 }
 
@@ -148,9 +158,22 @@ pub struct Identity {
     pub local: bool,
     /// Formato y clave de firma, si los commits se firman.
     pub signing: Option<String>,
+    /// Se le puede aplicar un perfil automáticamente (no se eligió la identidad global).
+    pub auto_profile: bool,
 }
 
 impl Identity {
+    /// Nombre de `ident` (`Nombre <correo>`).
+    pub fn name(&self) -> Option<&str> {
+        let ident = self.ident.as_deref()?;
+        Some(
+            ident
+                .rsplit_once(" <")
+                .map_or(ident, |(name, _)| name)
+                .trim(),
+        )
+    }
+
     /// Texto corto para mostrar el origen de la identidad.
     pub fn scope_label(&self) -> &str {
         match self.scope.as_deref() {
@@ -200,6 +223,9 @@ pub fn identity(repo: &Repo) -> Result<Identity> {
     }
     identity.local = config_get(repo, &["--local", "--get", "user.email"])?.is_some()
         || config_get(repo, &["--local", "--get", "user.name"])?.is_some();
+    identity.auto_profile =
+        config_get(repo, &["--local", "--type=bool", "--get", AUTO_PROFILE_KEY])?.as_deref()
+            != Some("false");
 
     let sign = config_get(repo, &["--type=bool", "--get", "commit.gpgsign"])?;
     if sign.as_deref() == Some("true") {
@@ -242,15 +268,31 @@ pub fn apply_profile(repo: &Repo, profile: &Profile) -> Result<()> {
         unset_local(repo, "user.signingkey")?;
         unset_local(repo, "gpg.format")?;
     }
-    Ok(())
+    unset_local(repo, AUTO_PROFILE_KEY)
 }
 
-/// Borra la identidad local del repositorio para volver a la global (o a sus `includeIf`).
+/// Borra la identidad local del repositorio para volver a la global (o a sus `includeIf`),
+/// y lo marca para que no se le vuelva a aplicar un perfil automáticamente.
 pub fn clear_local_identity(repo: &Repo) -> Result<()> {
     for key in PROFILE_KEYS {
         unset_local(repo, key)?;
     }
-    Ok(())
+    set_local(repo, AUTO_PROFILE_KEY, "false")
+}
+
+/// Perfil que hay que aplicar al abrir el repositorio: el de su servicio (GitHub o GitLab),
+/// si el repositorio no tiene identidad propia, no se eligió en él la identidad global y
+/// git no usa ya esa identidad (p. ej. por una regla `includeIf`).
+pub fn auto_profile<'a>(
+    identity: &Identity,
+    profiles: &'a [Profile],
+    remotes: &[Remote],
+) -> Option<&'a Profile> {
+    if identity.local || !identity.auto_profile {
+        return None;
+    }
+    let (_, profile) = suggested_profile(profiles, remotes)?;
+    (!profile.is_active(identity)).then_some(profile)
 }
 
 /// `git config <args>`; `None` si la clave no existe.
@@ -418,6 +460,66 @@ mod tests {
         assert_eq!(found(Hosting::Other("git.example.com".into())), None);
         assert_eq!(found(Hosting::Disk), None);
         assert_eq!(suggested_profile(&profiles, &[]), None);
+    }
+
+    #[test]
+    fn profile_is_active_only_with_same_name_email_and_signing() {
+        let t = TestRepo::new();
+        let repo = Repo::open(t.path()).unwrap();
+        // Mismo correo que el perfil, pero otro nombre: es lo que hay que detectar.
+        t.git(&["config", "user.name", "AnaTrabajo"]);
+        t.git(&["config", "user.email", "Ana.Torres@uni.example.edu"]);
+        let p = work();
+        assert!(!p.is_active(&identity(&repo).unwrap()));
+
+        apply_profile(&repo, &p).unwrap();
+        assert!(p.is_active(&identity(&repo).unwrap()));
+
+        let signed = Profile {
+            sign: true,
+            ..work()
+        };
+        assert!(!signed.is_active(&identity(&repo).unwrap()));
+    }
+
+    #[test]
+    fn applies_profile_automatically_only_without_a_choice() {
+        let t = TestRepo::new();
+        let repo = Repo::open(t.path()).unwrap();
+        let profiles = [work()];
+        let gitlab = [Remote {
+            name: "origin".into(),
+            url: "git@gitlab.com:grupo/repo.git".into(),
+            hosting: Hosting::GitLab,
+            protocol: Protocol::Ssh,
+        }];
+        let auto = || auto_profile(&identity(&repo).unwrap(), &profiles, &gitlab).cloned();
+
+        // TestRepo tiene identidad local: se respeta.
+        assert_eq!(auto(), None);
+
+        // Sin identidad propia (y sin global en el test, o con otra), toca aplicarlo.
+        for key in PROFILE_KEYS {
+            unset_local(&repo, key).unwrap();
+        }
+        let global = identity(&repo).unwrap();
+        if !work().is_active(&global) {
+            assert_eq!(auto(), Some(work()));
+        }
+        // En GitHub no corresponde.
+        let mut github = gitlab.clone();
+        github[0].hosting = Hosting::GitHub;
+        assert_eq!(auto_profile(&global, &profiles, &github), None);
+
+        // Al elegir la identidad global, no se vuelve a aplicar solo.
+        clear_local_identity(&repo).unwrap();
+        assert!(!identity(&repo).unwrap().auto_profile);
+        assert_eq!(auto(), None);
+
+        // Al aplicar un perfil a mano se quita la marca.
+        apply_profile(&repo, &work()).unwrap();
+        assert!(identity(&repo).unwrap().auto_profile);
+        assert_eq!(local(&t, AUTO_PROFILE_KEY), None);
     }
 
     #[test]

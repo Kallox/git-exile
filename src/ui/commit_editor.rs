@@ -44,6 +44,8 @@ pub struct EditorContext<'a> {
     pub profiles: &'a [Profile],
     /// Perfil asociado a los remotos del repositorio, con su posición en `profiles`.
     pub suggested: Option<(usize, &'a Profile)>,
+    /// Aviso de que se aplicó un perfil al abrir el repositorio.
+    pub notice: Option<&'a str>,
 }
 
 impl CommitEditor {
@@ -99,6 +101,13 @@ impl CommitEditor {
         });
         if let Some(warning) = identity_warning(ui, cx) {
             action = Some(warning);
+        }
+        if let Some(notice) = cx.notice {
+            ui.label(
+                RichText::new(notice)
+                    .size(12.0)
+                    .color(theme::colors().text_muted),
+            );
         }
 
         ui.horizontal(|ui| {
@@ -237,11 +246,7 @@ fn identity_header(ui: &mut Ui, cx: &EditorContext) -> Option<EditorAction> {
                 ui.weak("Todavía no hay perfiles");
             }
             for (i, profile) in cx.profiles.iter().enumerate() {
-                let current = identity.local
-                    && identity
-                        .email
-                        .as_deref()
-                        .is_some_and(|e| profile.has_email(e));
+                let current = identity.local && profile.is_active(identity);
                 let mut text = profile.label();
                 if profile.sign {
                     text.push_str(&format!(" · {}", profile.format.label()));
@@ -263,7 +268,8 @@ fn identity_header(ui: &mut Ui, cx: &EditorContext) -> Option<EditorAction> {
                 )
                 .on_hover_text(
                     "Quita nombre, correo y firma de .git/config para volver a la \
-                     configuración global (y sus reglas includeIf)",
+                     configuración global (y sus reglas includeIf). A este repositorio \
+                     no se le volverá a aplicar un perfil automáticamente.",
                 )
                 .on_disabled_hover_text("Este repositorio ya usa la identidad global")
                 .clicked()
@@ -283,8 +289,9 @@ fn identity_header(ui: &mut Ui, cx: &EditorContext) -> Option<EditorAction> {
 /// Aviso si los remotos piden un perfil distinto de la identidad actual.
 fn identity_warning(ui: &mut Ui, cx: &EditorContext) -> Option<EditorAction> {
     let (index, profile) = cx.suggested?;
-    let email = cx.identity?.email.as_deref().unwrap_or_default();
-    if profile.has_email(email) {
+    let identity = cx.identity?;
+    // Con la identidad global elegida a propósito no se insiste.
+    if profile.is_active(identity) || !identity.auto_profile {
         return None;
     }
     let mut action = None;

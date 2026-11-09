@@ -29,8 +29,9 @@ credential helpers, etc.).
 - Editor de commits con resumen, descripción y opción de amend.
 - Perfiles de identidad (nombre, correo y firma GPG/SSH) para elegir con quién se firman los commits de cada
   repositorio. El perfil se guarda en el `.git/config` del repositorio, así la terminal usa lo mismo. El editor
-  muestra de dónde sale la identidad (repositorio, global o `includeIf`) y avisa si los remotos corresponden a
-  otro perfil. Con amend se puede actualizar el autor.
+  muestra de dónde sale la identidad (repositorio, global o `includeIf`). Un perfil asociado a GitHub o GitLab
+  se aplica solo al abrir un repositorio de ese servicio que no tenga identidad propia; si en un repositorio se
+  elige la identidad global, ya no se le aplica. Con amend se puede actualizar el autor.
 - Crear ramas a partir del commit seleccionado (por defecto HEAD), con opción de cambiar a ellas.
 - Cambiar entre todas las ramas locales y remotas desde un selector con filtro.
 - Fetch, pull y push desde la barra del repositorio.
