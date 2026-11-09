@@ -8,6 +8,7 @@ mod create;
 mod details;
 mod diff;
 mod graph;
+mod identity;
 mod log;
 mod remote;
 mod repo;
@@ -21,13 +22,16 @@ pub(crate) mod testutil;
 
 pub use branch::{Branch, checkout_commit, create_branch, list_branches, switch_branch};
 pub use commit::{
-    author_ident, create_commit, discard, last_commit_message, stage, stage_all, unstage,
-    unstage_all,
+    create_commit, discard, last_commit_message, stage, stage_all, unstage, unstage_all,
 };
 pub use create::{NewRepo, repo_name_from_url};
 pub use details::{CommitDetails, Person, load_commit};
 pub use diff::{DiffLine, FileDiff, FileStatus, Hunk, LineKind};
 pub use graph::{Graph, GraphRow, Half};
+pub use identity::{
+    Identity, Profile, Service, SigningFormat, apply_profile, clear_local_identity, identity,
+    suggested_profile,
+};
 pub use log::{Commit, RefKind, RefLabel, load_log};
 #[cfg(test)]
 pub use remote::Hosting;

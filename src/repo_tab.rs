@@ -6,7 +6,7 @@ use crate::app::{Message, MessageKind};
 use crate::git::{self, Commit, CommitDetails, FileDiff, Graph, Repo, WorkingTreeStatus};
 use crate::ui::branch_dialog::{DialogAction, NewBranchDialog};
 use crate::ui::commit_details::{self, DetailsAction};
-use crate::ui::commit_editor::{CommitEditor, EditorAction};
+use crate::ui::commit_editor::{CommitEditor, EditorAction, EditorContext};
 use crate::ui::commit_list::{CommitList, ContextAction, ListRow};
 use crate::ui::connect_remote_dialog::{ConnectAction, ConnectRemoteDialog};
 use crate::ui::diff_view;
@@ -40,7 +40,7 @@ pub enum RepoMessage {
     Done(git::Result<()>),
     Committed(git::Result<String>),
     LastMessage(git::Result<String>),
-    Ident(git::Result<String>),
+    Ident(git::Result<git::Identity>),
     BranchCreated(git::Result<()>),
     Branches(git::Result<Vec<git::Branch>>),
     Remotes(git::Result<Vec<git::Remote>>),
@@ -87,8 +87,14 @@ enum Action {
     Commit {
         message: String,
         amend: bool,
+        reset_author: bool,
     },
     LoadLastMessage,
+    /// Escribir el perfil en la configuración local del repositorio.
+    ApplyProfile(git::Profile),
+    UseGlobalIdentity,
+    /// Abrir el diálogo de perfiles (lo gestiona la aplicación).
+    ManageProfiles,
     Refresh,
     /// Abrir el diálogo de nueva rama desde un commit (o HEAD si es `None`).
     NewBranch(Option<usize>),
@@ -135,8 +141,8 @@ pub struct RepoTab {
     wt_file: Option<WtFile>,
     wt_diff: Option<FileDiff>,
     editor: CommitEditor,
-    /// Identidad con la que se harán los commits (`git var GIT_AUTHOR_IDENT`).
-    author: Option<String>,
+    /// Identidad con la que se harán los commits y de dónde sale.
+    identity: Option<git::Identity>,
     /// Huella de ramas/tags/HEAD de la última lectura del estado.
     refs: Option<String>,
     /// Commit a volver a seleccionar cuando se recargue el historial.
@@ -176,7 +182,7 @@ impl RepoTab {
             wt_file: None,
             wt_diff: None,
             editor: CommitEditor::default(),
-            author: None,
+            identity: None,
             refs: None,
             reselect: None,
             error: None,
@@ -193,8 +199,6 @@ impl RepoTab {
         // El worker procesa en orden: el estado llega antes que el log.
         tab.refresh_status(jobs);
         tab.load_log_page(jobs);
-        let repo = tab.repo.clone();
-        jobs.spawn(move || RepoMessage::Ident(git::author_ident(&repo)));
         tab
     }
 
@@ -252,6 +256,9 @@ impl RepoTab {
         jobs.spawn(move || RepoMessage::Branches(git::list_branches(&repo)));
         let repo = self.repo.clone();
         jobs.spawn(move || RepoMessage::Remotes(git::list_remotes(&repo)));
+        // La identidad puede cambiar fuera (p. ej. `git config` en la terminal).
+        let repo = self.repo.clone();
+        jobs.spawn(move || RepoMessage::Ident(git::identity(&repo)));
     }
 
     fn select(&mut self, row: ListRow, jobs: &mut Jobs) {
@@ -337,14 +344,24 @@ impl RepoTab {
             }
             Action::StageAll => self.run_op(jobs, git::stage_all),
             Action::UnstageAll => self.run_op(jobs, git::unstage_all),
-            Action::Commit { message, amend } => {
+            Action::Commit {
+                message,
+                amend,
+                reset_author,
+            } => {
                 self.editor.committing = true;
                 let repo = self.repo.clone();
                 jobs.spawn(move || {
-                    RepoMessage::Committed(git::create_commit(&repo, &message, amend))
+                    RepoMessage::Committed(git::create_commit(&repo, &message, amend, reset_author))
                 });
             }
+            Action::ApplyProfile(profile) => {
+                self.run_op(jobs, move |repo| git::apply_profile(repo, &profile));
+            }
+            Action::UseGlobalIdentity => self.run_op(jobs, git::clear_local_identity),
             Action::Refresh => self.refresh_status(jobs),
+            // Lo atiende `ui`, que se lo pasa a la aplicación.
+            Action::ManageProfiles => {}
             Action::LoadLastMessage => {
                 let repo = self.repo.clone();
                 jobs.spawn(move || RepoMessage::LastMessage(git::last_commit_message(&repo)));
@@ -484,8 +501,10 @@ impl RepoTab {
                 Ok(_) => {}
                 Err(e) => self.error = Some(e.to_string()),
             },
-            // Sin user.name/user.email: git lo explicará al hacer commit.
-            RepoMessage::Ident(result) => self.author = result.ok(),
+            RepoMessage::Ident(result) => match result {
+                Ok(identity) => self.identity = Some(identity),
+                Err(e) => self.error = Some(format!("Error leyendo la identidad: {e}")),
+            },
             RepoMessage::BranchCreated(result) => match result {
                 Ok(()) => {
                     self.new_branch = None;
@@ -624,8 +643,8 @@ impl RepoTab {
         }
     }
 
-    /// Dibuja la pestaña completa.
-    pub fn ui(&mut self, ui: &mut egui::Ui, jobs: &mut Jobs) {
+    /// Dibuja la pestaña completa. Devuelve `true` si se pidió administrar los perfiles.
+    pub fn ui(&mut self, ui: &mut egui::Ui, jobs: &mut Jobs, profiles: &[git::Profile]) -> bool {
         let mut actions = Vec::new();
         egui::TopBottomPanel::top("repo_toolbar")
             .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(20, 12)))
@@ -633,7 +652,7 @@ impl RepoTab {
                 self.toolbar(ui, &mut actions);
             });
         self.error_bar(ui);
-        self.repo_view(ui, &mut actions);
+        self.repo_view(ui, &mut actions, profiles);
         if let Some(dialog) = &mut self.new_branch {
             match dialog.show(ui.ctx()) {
                 Some(DialogAction::Create {
@@ -663,9 +682,14 @@ impl RepoTab {
                 None => {}
             }
         }
+        let mut manage_profiles = false;
         for action in actions {
-            self.apply(action, jobs);
+            match action {
+                Action::ManageProfiles => manage_profiles = true,
+                action => self.apply(action, jobs),
+            }
         }
+        manage_profiles
     }
 
     fn toolbar(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
@@ -918,7 +942,12 @@ impl RepoTab {
         }
     }
 
-    fn repo_view(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+    fn repo_view(
+        &mut self,
+        ui: &mut egui::Ui,
+        actions: &mut Vec<Action>,
+        profiles: &[git::Profile],
+    ) {
         // Si los cambios desaparecen, la fila deja de existir.
         if self.selected == Some(ListRow::WorkingTree) && !self.has_changes() {
             self.selected = None;
@@ -930,7 +959,7 @@ impl RepoTab {
                 .default_height(ui.available_height() * 0.55)
                 .min_height(120.0)
                 .show_inside(ui, |ui| match self.selected {
-                    Some(ListRow::WorkingTree) => self.worktree_panel(ui, actions),
+                    Some(ListRow::WorkingTree) => self.worktree_panel(ui, actions, profiles),
                     _ => self.details_panel(ui, actions),
                 });
         }
@@ -1014,7 +1043,12 @@ impl RepoTab {
             });
     }
 
-    fn worktree_panel(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+    fn worktree_panel(
+        &mut self,
+        ui: &mut egui::Ui,
+        actions: &mut Vec<Action>,
+        profiles: &[git::Profile],
+    ) {
         let Some(status) = &self.status else {
             ui.spinner();
             return;
@@ -1034,15 +1068,36 @@ impl RepoTab {
                     .resizable(false)
                     .show_inside(ui, |ui| {
                         ui.add_space(4.0);
-                        let editor_action =
-                            self.editor
-                                .show(ui, status.staged.len(), self.author.as_deref());
-                        match editor_action {
-                            Some(EditorAction::Commit { message, amend }) => {
-                                actions.push(Action::Commit { message, amend })
-                            }
+                        let remotes = self.remotes.as_deref().unwrap_or_default();
+                        let cx = EditorContext {
+                            staged: status.staged.len(),
+                            identity: self.identity.as_ref(),
+                            profiles,
+                            suggested: git::suggested_profile(profiles, remotes),
+                        };
+                        match self.editor.show(ui, cx) {
+                            Some(EditorAction::Commit {
+                                message,
+                                amend,
+                                reset_author,
+                            }) => actions.push(Action::Commit {
+                                message,
+                                amend,
+                                reset_author,
+                            }),
                             Some(EditorAction::LoadLastMessage) => {
                                 actions.push(Action::LoadLastMessage)
+                            }
+                            Some(EditorAction::UseProfile(i)) => {
+                                if let Some(profile) = profiles.get(i) {
+                                    actions.push(Action::ApplyProfile(profile.clone()));
+                                }
+                            }
+                            Some(EditorAction::UseGlobalIdentity) => {
+                                actions.push(Action::UseGlobalIdentity)
+                            }
+                            Some(EditorAction::ManageProfiles) => {
+                                actions.push(Action::ManageProfiles)
                             }
                             None => {}
                         }

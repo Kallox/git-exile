@@ -90,11 +90,20 @@ fn remove_empty_parents(root: &Path, path: &str) {
 
 /// Crea un commit con lo que hay en el índice. Git aplica la configuración
 /// del usuario: identidad, hooks, firma, plantillas de limpieza, etc.
-/// Devuelve el hash del nuevo commit.
-pub fn create_commit(repo: &Repo, message: &str, amend: bool) -> Result<String> {
+/// Con `reset_author`, el amend pone como autor la identidad actual en lugar de
+/// conservar la original. Devuelve el hash del nuevo commit.
+pub fn create_commit(
+    repo: &Repo,
+    message: &str,
+    amend: bool,
+    reset_author: bool,
+) -> Result<String> {
     let mut args = vec!["commit", "-F", "-"];
     if amend {
         args.push("--amend");
+        if reset_author {
+            args.push("--reset-author");
+        }
     }
     repo.git_with_stdin(&args, message.as_bytes())?;
     Ok(repo.git(&["rev-parse", "HEAD"])?.trim().to_owned())
@@ -308,7 +317,7 @@ mod tests {
         let repo = Repo::open(t.path()).unwrap();
         stage_all(&repo).unwrap();
 
-        let id = create_commit(&repo, "Primer commit\n\nCon cuerpo", false).unwrap();
+        let id = create_commit(&repo, "Primer commit\n\nCon cuerpo", false, false).unwrap();
         assert_eq!(id, t.git(&["rev-parse", "HEAD"]).trim());
         assert_eq!(
             last_commit_message(&repo).unwrap(),
@@ -316,7 +325,7 @@ mod tests {
         );
         assert!(status(&t).is_clean());
 
-        let amended = create_commit(&repo, "Corregido", true).unwrap();
+        let amended = create_commit(&repo, "Corregido", true, false).unwrap();
         assert_ne!(amended, id);
         assert_eq!(last_commit_message(&repo).unwrap(), "Corregido");
         assert_eq!(t.git(&["rev-list", "--count", "HEAD"]).trim(), "1");
@@ -327,8 +336,27 @@ mod tests {
         let t = TestRepo::new();
         let repo = Repo::open(t.path()).unwrap();
         // Nada en el índice.
-        let err = create_commit(&repo, "vacío", false).unwrap_err();
+        let err = create_commit(&repo, "vacío", false, false).unwrap_err();
         assert!(err.to_string().contains("nothing"), "{err}");
+    }
+
+    #[test]
+    fn amend_can_reset_the_author() {
+        let t = TestRepo::new();
+        t.commit_file("a.txt", "1\n", "first");
+        t.git(&["config", "user.name", "Otro"]);
+        t.git(&["config", "user.email", "otro@example.com"]);
+        let repo = Repo::open(t.path()).unwrap();
+        let author = || {
+            t.git(&["log", "-1", "--format=%an <%ae>"])
+                .trim()
+                .to_owned()
+        };
+
+        create_commit(&repo, "first", true, false).unwrap();
+        assert_eq!(author(), "Test <test@example.com>");
+        create_commit(&repo, "first", true, true).unwrap();
+        assert_eq!(author(), "Otro <otro@example.com>");
     }
 
     #[test]

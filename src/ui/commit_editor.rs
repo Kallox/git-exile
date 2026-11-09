@@ -4,6 +4,7 @@ use eframe::egui::{self, Key, Modifiers, RichText, TextEdit, Ui};
 
 use super::icons::{self, ButtonStyle, Icon};
 use super::theme;
+use crate::git::{Identity, Profile};
 
 const SUMMARY_SOFT_LIMIT: usize = 50;
 const SUMMARY_HARD_LIMIT: usize = 72;
@@ -13,6 +14,8 @@ pub struct CommitEditor {
     pub summary: String,
     pub body: String,
     pub amend: bool,
+    /// Con amend, poner como autor la identidad actual.
+    pub reset_author: bool,
     /// Hay un commit en marcha: se desactiva el botón.
     pub committing: bool,
 }
@@ -21,9 +24,26 @@ pub enum EditorAction {
     Commit {
         message: String,
         amend: bool,
+        reset_author: bool,
     },
     /// Se activó "amend" con el editor vacío: rellenar con el último mensaje.
     LoadLastMessage,
+    /// Aplicar al repositorio el perfil con esta posición.
+    UseProfile(usize),
+    /// Quitar la identidad del repositorio para usar la global.
+    UseGlobalIdentity,
+    ManageProfiles,
+}
+
+/// Lo que el editor necesita saber del repositorio para dibujarse.
+pub struct EditorContext<'a> {
+    /// Número de archivos preparados.
+    pub staged: usize,
+    /// `None` mientras se lee.
+    pub identity: Option<&'a Identity>,
+    pub profiles: &'a [Profile],
+    /// Perfil asociado a los remotos del repositorio, con su posición en `profiles`.
+    pub suggested: Option<(usize, &'a Profile)>,
 }
 
 impl CommitEditor {
@@ -31,6 +51,7 @@ impl CommitEditor {
         self.summary.clear();
         self.body.clear();
         self.amend = false;
+        self.reset_author = false;
     }
 
     /// Rellena el editor con un mensaje completo (resumen + cuerpo).
@@ -50,13 +71,7 @@ impl CommitEditor {
         }
     }
 
-    /// `staged` es el número de archivos preparados; `author` la identidad de git.
-    pub fn show(
-        &mut self,
-        ui: &mut Ui,
-        staged: usize,
-        author: Option<&str>,
-    ) -> Option<EditorAction> {
+    pub fn show(&mut self, ui: &mut Ui, cx: EditorContext) -> Option<EditorAction> {
         let mut action = None;
         // Se consume antes de dibujar los campos para que no inserte un salto de línea.
         let shortcut = ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::Enter));
@@ -67,30 +82,24 @@ impl CommitEditor {
             .corner_radius(10)
             .inner_margin(egui::Margin::symmetric(16, 14))
             .show(ui, |ui| {
-                action = self.form(ui, staged, author, shortcut);
+                action = self.form(ui, &cx, shortcut);
             });
         action
     }
 
-    fn form(
-        &mut self,
-        ui: &mut Ui,
-        staged: usize,
-        author: Option<&str>,
-        shortcut: bool,
-    ) -> Option<EditorAction> {
+    fn form(&mut self, ui: &mut Ui, cx: &EditorContext, shortcut: bool) -> Option<EditorAction> {
+        let staged = cx.staged;
         let mut action = None;
         ui.spacing_mut().item_spacing.y = 8.0;
         ui.horizontal(|ui| {
             ui.label(RichText::new("Nuevo commit").font(theme::font_semibold(13.0)));
-            if let Some(author) = author {
-                ui.label(
-                    RichText::new(format!("como {author}"))
-                        .size(12.0)
-                        .color(theme::colors().text_muted),
-                );
+            if let Some(chosen) = identity_header(ui, cx) {
+                action = Some(chosen);
             }
         });
+        if let Some(warning) = identity_warning(ui, cx) {
+            action = Some(warning);
+        }
 
         ui.horizontal(|ui| {
             let count = self.summary.chars().count();
@@ -133,6 +142,13 @@ impl CommitEditor {
             {
                 action = Some(EditorAction::LoadLastMessage);
             }
+            if self.amend {
+                ui.checkbox(&mut self.reset_author, "Actualizar autor")
+                    .on_hover_text(
+                        "Poner como autor la identidad actual. Sin esto, el amend conserva \
+                         el autor original del commit.",
+                    );
+            }
 
             let has_message = !self.summary.trim().is_empty();
             let can_commit = has_message && (staged > 0 || self.amend) && !self.committing;
@@ -152,6 +168,7 @@ impl CommitEditor {
                     action = Some(EditorAction::Commit {
                         message: self.message(),
                         amend: self.amend,
+                        reset_author: self.amend && self.reset_author,
                     });
                 }
                 if self.committing {
@@ -161,6 +178,130 @@ impl CommitEditor {
         });
         action
     }
+}
+
+/// "como Nombre <correo>", de dónde sale y el menú para cambiarla.
+fn identity_header(ui: &mut Ui, cx: &EditorContext) -> Option<EditorAction> {
+    let identity = cx.identity?;
+    let muted = theme::colors().text_muted;
+    match &identity.ident {
+        Some(ident) => {
+            let mut hint = format!("Identidad tomada de: {}", identity.scope_label());
+            if let Some(origin) = &identity.origin {
+                hint.push_str(&format!("\n{origin}"));
+            }
+            hint.push_str(&match &identity.signing {
+                Some(signing) => format!("\nFirma: {signing}"),
+                None => "\nLos commits no se firman".to_owned(),
+            });
+            ui.label(
+                RichText::new(format!("como {ident}"))
+                    .size(12.0)
+                    .color(muted),
+            )
+            .on_hover_text(hint);
+            let scope = if identity.signing.is_some() {
+                format!("{} · firmado", identity.scope_label())
+            } else {
+                identity.scope_label().to_owned()
+            };
+            ui.label(
+                RichText::new(scope)
+                    .size(11.0)
+                    .color(theme::colors().text_secondary)
+                    .background_color(theme::colors().bg_input),
+            );
+        }
+        None => {
+            ui.label(
+                RichText::new("sin identidad: falta user.name o user.email")
+                    .size(12.0)
+                    .color(ui.visuals().warn_fg_color),
+            );
+        }
+    }
+
+    let mut action = None;
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        let button = ui
+            .add(egui::Button::new(RichText::new("Cambiar ▾").size(12.0)).frame(false))
+            .on_hover_text("Elegir con qué identidad se crean los commits en este repositorio");
+        egui::Popup::menu(&button).show(|ui| {
+            ui.set_min_width(300.0);
+            ui.label(
+                RichText::new("PERFILES")
+                    .font(theme::font_semibold(11.0))
+                    .color(muted),
+            );
+            if cx.profiles.is_empty() {
+                ui.weak("Todavía no hay perfiles");
+            }
+            for (i, profile) in cx.profiles.iter().enumerate() {
+                let current = identity.local
+                    && identity
+                        .email
+                        .as_deref()
+                        .is_some_and(|e| profile.has_email(e));
+                let mut text = profile.label();
+                if profile.sign {
+                    text.push_str(&format!(" · {}", profile.format.label()));
+                }
+                if ui
+                    .selectable_label(current, text)
+                    .on_hover_text("Se guarda en .git/config: también lo usa git desde la terminal")
+                    .clicked()
+                {
+                    action = Some(EditorAction::UseProfile(i));
+                    ui.close();
+                }
+            }
+            ui.separator();
+            if ui
+                .add_enabled(
+                    identity.local,
+                    egui::Button::new("Usar la identidad global"),
+                )
+                .on_hover_text(
+                    "Quita nombre, correo y firma de .git/config para volver a la \
+                     configuración global (y sus reglas includeIf)",
+                )
+                .on_disabled_hover_text("Este repositorio ya usa la identidad global")
+                .clicked()
+            {
+                action = Some(EditorAction::UseGlobalIdentity);
+                ui.close();
+            }
+            if ui.button("Administrar perfiles…").clicked() {
+                action = Some(EditorAction::ManageProfiles);
+                ui.close();
+            }
+        });
+    });
+    action
+}
+
+/// Aviso si los remotos piden un perfil distinto de la identidad actual.
+fn identity_warning(ui: &mut Ui, cx: &EditorContext) -> Option<EditorAction> {
+    let (index, profile) = cx.suggested?;
+    let email = cx.identity?.email.as_deref().unwrap_or_default();
+    if profile.has_email(email) {
+        return None;
+    }
+    let mut action = None;
+    ui.horizontal_wrapped(|ui| {
+        ui.label(
+            RichText::new(format!(
+                "Los remotos de este repositorio corresponden al perfil {}",
+                profile.label()
+            ))
+            .size(12.0)
+            .color(ui.visuals().warn_fg_color),
+        );
+        if ui.small_button("Usar este perfil").clicked() {
+            action = Some(EditorAction::UseProfile(index));
+        }
+    });
+    action
 }
 
 #[cfg(test)]

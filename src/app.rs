@@ -6,6 +6,7 @@ use crate::browser;
 use crate::git::{self, NewRepo, Repo};
 use crate::repo_tab::{Jobs, RepoMessage, RepoTab};
 use crate::ui::icons::{self, ButtonStyle, Icon};
+use crate::ui::profiles_dialog::{ProfilesAction, ProfilesDialog};
 use crate::ui::repo_browser::{BrowserAction, RepoBrowser};
 use crate::ui::theme;
 use crate::worker::Worker;
@@ -14,6 +15,7 @@ const RECENT_KEY: &str = "recent_repositories";
 const OPEN_TABS_KEY: &str = "open_tabs";
 const ACTIVE_TAB_KEY: &str = "active_tab";
 const THEME_KEY: &str = "theme";
+const PROFILES_KEY: &str = "identity_profiles";
 const MAX_RECENT: usize = 10;
 
 /// Resultado de un trabajo en segundo plano, etiquetado con su pestaña.
@@ -87,6 +89,9 @@ pub struct GitExileApp {
     tabs: Vec<Tab>,
     active: usize,
     recent: Vec<PathBuf>,
+    /// Identidades para elegir con qué nombre y correo se hacen los commits.
+    profiles: Vec<git::Profile>,
+    profiles_dialog: Option<ProfilesDialog>,
     error: Option<String>,
 }
 
@@ -109,6 +114,9 @@ impl GitExileApp {
         let active: usize = storage
             .and_then(|s| eframe::get_value(s, ACTIVE_TAB_KEY))
             .unwrap_or_default();
+        let profiles: Vec<git::Profile> = storage
+            .and_then(|s| eframe::get_value(s, PROFILES_KEY))
+            .unwrap_or_default();
 
         let mut app = Self {
             worker: Worker::new(cc.egui_ctx.clone()),
@@ -119,6 +127,8 @@ impl GitExileApp {
             tabs: Vec::new(),
             active: 0,
             recent,
+            profiles,
+            profiles_dialog: None,
             error: None,
         };
 
@@ -398,7 +408,9 @@ impl GitExileApp {
                 });
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                options_menu(ui);
+                if options_menu(ui) {
+                    self.profiles_dialog = Some(ProfilesDialog::default());
+                }
                 let recent = icons::button(ui, Icon::Clock, "Recientes", ButtonStyle::Ghost, true);
                 egui::Popup::menu(&recent).show(|ui| {
                     ui.set_min_width(320.0);
@@ -428,6 +440,25 @@ impl GitExileApp {
         }
         if new_tab {
             self.new_browser_tab();
+        }
+    }
+
+    fn profiles_window(&mut self, ctx: &egui::Context) {
+        let Some(dialog) = &mut self.profiles_dialog else {
+            return;
+        };
+        match dialog.show(ctx, &self.profiles) {
+            Some(ProfilesAction::Save {
+                index: Some(i),
+                profile,
+            }) if i < self.profiles.len() => self.profiles[i] = profile,
+            Some(ProfilesAction::Save { profile, .. }) => self.profiles.push(profile),
+            Some(ProfilesAction::Delete(i)) if i < self.profiles.len() => {
+                self.profiles.remove(i);
+            }
+            Some(ProfilesAction::Delete(_)) => {}
+            Some(ProfilesAction::Close) => self.profiles_dialog = None,
+            None => {}
         }
     }
 
@@ -462,8 +493,9 @@ impl GitExileApp {
     }
 }
 
-/// Botón de opciones con su desplegable.
-fn options_menu(ui: &mut egui::Ui) {
+/// Botón de opciones con su desplegable. Devuelve `true` si se pidió abrir los perfiles.
+fn options_menu(ui: &mut egui::Ui) -> bool {
+    let mut profiles = false;
     let button = icons::button(ui, Icon::Sliders, "Opciones", ButtonStyle::Ghost, true);
     // Sigue abierto al elegir, para poder comparar los temas.
     egui::Popup::menu(&button)
@@ -480,7 +512,18 @@ fn options_menu(ui: &mut egui::Ui) {
                     theme::set(ui.ctx(), option);
                 }
             }
+            ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new("IDENTIDAD")
+                    .font(theme::font_semibold(11.0))
+                    .color(theme::colors().text_muted),
+            );
+            if ui.button("Perfiles de identidad…").clicked() {
+                profiles = true;
+                ui.close();
+            }
         });
+    profiles
 }
 
 /// Fila del selector de tema: muestra de colores, nombre y marca del activo.
@@ -663,7 +706,9 @@ impl eframe::App for GitExileApp {
         self.error_bar(ctx);
 
         let mut browser_action = None;
+        let mut manage_profiles = false;
         let recent = &self.recent;
+        let profiles = &self.profiles;
         let open: Vec<PathBuf> = self
             .tabs
             .iter()
@@ -703,7 +748,9 @@ impl eframe::App for GitExileApp {
                             tab: tab.id,
                         };
                         // Cada pestaña guarda su propio scroll y estado de widgets.
-                        ui.push_id(tab.id, |ui| repo.ui(ui, &mut jobs));
+                        manage_profiles = ui
+                            .push_id(tab.id, |ui| repo.ui(ui, &mut jobs, profiles))
+                            .inner;
                     }
                 }
             });
@@ -712,6 +759,10 @@ impl eframe::App for GitExileApp {
             Some(BrowserAction::Create(new)) => self.create_in(self.active, new),
             None => {}
         }
+        if manage_profiles {
+            self.profiles_dialog = Some(ProfilesDialog::default());
+        }
+        self.profiles_window(ctx);
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
@@ -738,5 +789,6 @@ impl eframe::App for GitExileApp {
         eframe::set_value(storage, OPEN_TABS_KEY, &open);
         eframe::set_value(storage, ACTIVE_TAB_KEY, &active);
         eframe::set_value(storage, THEME_KEY, &theme::current().id());
+        eframe::set_value(storage, PROFILES_KEY, &self.profiles);
     }
 }
