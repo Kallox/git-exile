@@ -381,7 +381,7 @@ impl GitExileApp {
         ui.horizontal_centered(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
             egui::ScrollArea::horizontal()
-                .max_width(ui.available_width() - 300.0)
+                .max_width(ui.available_width() - 350.0)
                 .show(ui, |ui| {
                     ui.horizontal_centered(|ui| {
                         for (i, tab) in self.tabs.iter().enumerate() {
@@ -408,6 +408,7 @@ impl GitExileApp {
                 });
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                version_label(ui);
                 if options_menu(ui) {
                     self.profiles_dialog = Some(ProfilesDialog::default());
                 }
@@ -494,6 +495,19 @@ impl GitExileApp {
 }
 
 /// Botón de opciones con su desplegable. Devuelve `true` si se pidió abrir los perfiles.
+/// Versión de la aplicación, tomada de `Cargo.toml` al compilar.
+const VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));
+
+/// Etiqueta discreta con la versión de la aplicación.
+fn version_label(ui: &mut egui::Ui) {
+    ui.label(
+        egui::RichText::new(VERSION)
+            .font(theme::mono(11.0))
+            .color(theme::colors().text_muted),
+    )
+    .on_hover_text(format!("git-exile {VERSION}"));
+}
+
 fn options_menu(ui: &mut egui::Ui) -> bool {
     let mut profiles = false;
     let button = icons::button(ui, Icon::Sliders, "Opciones", ButtonStyle::Ghost, true);
