@@ -151,6 +151,8 @@ pub struct RepoTab {
     refs: Option<String>,
     /// Commit a volver a seleccionar cuando se recargue el historial.
     reselect: Option<String>,
+    /// Commit recién creado que hay que seleccionar cuando aparezca en el historial.
+    committed: Option<String>,
     pub error: Option<String>,
     new_branch: Option<NewBranchDialog>,
     discard: Option<DiscardDialog>,
@@ -191,6 +193,7 @@ impl RepoTab {
             auto_profile_notice: None,
             refs: None,
             reselect: None,
+            committed: None,
             error: None,
             new_branch: None,
             discard: None,
@@ -244,6 +247,9 @@ impl RepoTab {
         if let Some(ListRow::Commit(i)) = self.selected {
             self.reselect = self.commits.get(i).map(|c| c.id.clone());
             self.selected = None;
+        }
+        if let Some(id) = self.committed.take() {
+            self.reselect = Some(id);
         }
         self.commits.clear();
         self.search_cache = None;
@@ -497,8 +503,9 @@ impl RepoTab {
             RepoMessage::Committed(result) => {
                 self.editor.committing = false;
                 match result {
-                    Ok(_) => {
+                    Ok(id) => {
                         self.editor.clear();
+                        self.committed = Some(id);
                         // El refresco del estado detecta el nuevo commit y recarga el log.
                         self.refresh_status(jobs);
                     }
@@ -636,11 +643,16 @@ impl RepoTab {
         if !self.has_changes() {
             self.wt_file = None;
             self.wt_diff = None;
-            if !self.commits.is_empty() {
+            // Tras un commit, la recarga del historial selecciona el commit nuevo.
+            if self.committed.is_some() {
+                self.selected = None;
+            } else if !self.commits.is_empty() {
                 self.select(ListRow::Commit(0), jobs);
             }
             return;
         }
+        // Quedan cambios sin commitear: se sigue en la vista de cambios.
+        self.committed = None;
         let status = self.status.as_ref().unwrap();
         let file = self
             .wt_file
