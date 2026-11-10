@@ -9,6 +9,7 @@ use crate::ui::commit_details::{self, DetailsAction};
 use crate::ui::commit_editor::{CommitEditor, EditorAction, EditorContext};
 use crate::ui::commit_list::{CommitList, ContextAction, ListRow};
 use crate::ui::connect_remote_dialog::{ConnectAction, ConnectRemoteDialog};
+use crate::ui::delete_branch_dialog::{DeleteBranchAction, DeleteBranchDialog};
 use crate::ui::diff_view;
 use crate::ui::discard_dialog::{DiscardAction, DiscardDialog};
 use crate::ui::icons::{self, ButtonStyle, Icon};
@@ -42,6 +43,12 @@ pub enum RepoMessage {
     LastMessage(git::Result<String>),
     Ident(git::Result<git::Identity>),
     BranchCreated(git::Result<()>),
+    /// Commits que solo están en la rama local `name`.
+    Unmerged {
+        name: String,
+        result: git::Result<usize>,
+    },
+    BranchDeleted(git::Result<()>),
     Branches(git::Result<Vec<git::Branch>>),
     Remotes(git::Result<Vec<git::Remote>>),
     Synced(git::Result<()>),
@@ -106,6 +113,10 @@ enum Action {
     CloseDialog,
     /// Cambiar a una rama local por nombre.
     SwitchTo(String),
+    /// Abrir la confirmación para borrar una rama local por nombre.
+    AskDeleteBranch(String),
+    CloseDeleteBranch,
+    DeleteBranch,
     /// Abrir la confirmación para descartar los cambios de un archivo.
     AskDiscard(DiscardDialog),
     CloseDiscard,
@@ -156,6 +167,7 @@ pub struct RepoTab {
     pub error: Option<String>,
     new_branch: Option<NewBranchDialog>,
     discard: Option<DiscardDialog>,
+    delete_branch: Option<DeleteBranchDialog>,
     branches: Vec<git::Branch>,
     branch_filter: String,
     /// `None` hasta la primera lectura; vacío si el repositorio está solo en local.
@@ -197,6 +209,7 @@ impl RepoTab {
             error: None,
             new_branch: None,
             discard: None,
+            delete_branch: None,
             branches: Vec::new(),
             branch_filter: String::new(),
             remotes: None,
@@ -405,6 +418,30 @@ impl RepoTab {
                     }
                 });
             }
+            Action::AskDeleteBranch(name) => {
+                // Solo ramas locales: las remotas no se pueden borrar desde aquí.
+                let local = self.branches.iter().any(|b| !b.remote && b.name == name);
+                if !local {
+                    return;
+                }
+                self.delete_branch = Some(DeleteBranchDialog::new(name.clone()));
+                let repo = self.repo.clone();
+                jobs.spawn(move || RepoMessage::Unmerged {
+                    result: git::unmerged_commits(&repo, &name),
+                    name,
+                });
+            }
+            Action::CloseDeleteBranch => self.delete_branch = None,
+            Action::DeleteBranch => {
+                if let Some(dialog) = &mut self.delete_branch {
+                    dialog.busy = true;
+                    let name = dialog.name.clone();
+                    let repo = self.repo.clone();
+                    jobs.spawn(move || {
+                        RepoMessage::BranchDeleted(git::delete_branch(&repo, &name))
+                    });
+                }
+            }
             Action::AskDiscard(dialog) => self.discard = Some(dialog),
             Action::CloseDiscard => self.discard = None,
             Action::Discard => {
@@ -535,6 +572,30 @@ impl RepoTab {
                         self.error = Some(e.to_string());
                     }
                 }
+            },
+            RepoMessage::Unmerged { name, result } => {
+                if let Some(dialog) = &mut self.delete_branch
+                    && dialog.name == name
+                {
+                    match result {
+                        Ok(n) => dialog.unmerged = Some(n),
+                        Err(e) => dialog.error = Some(e.to_string()),
+                    }
+                }
+            }
+            RepoMessage::BranchDeleted(result) => match result {
+                Ok(()) => {
+                    self.delete_branch = None;
+                    // Las referencias cambian: se recarga el historial.
+                    self.refresh_status(jobs);
+                }
+                Err(e) => match &mut self.delete_branch {
+                    Some(dialog) => {
+                        dialog.busy = false;
+                        dialog.error = Some(e.to_string());
+                    }
+                    None => self.error = Some(e.to_string()),
+                },
             },
             RepoMessage::Branches(result) => match result {
                 Ok(branches) => self.branches = branches,
@@ -714,6 +775,13 @@ impl RepoTab {
             match dialog.show(ui.ctx()) {
                 Some(ConnectAction::Connect(url)) => actions.push(Action::ConnectRemote(url)),
                 Some(ConnectAction::Cancel) => actions.push(Action::CloseConnectRemote),
+                None => {}
+            }
+        }
+        if let Some(dialog) = &self.delete_branch {
+            match dialog.show(ui.ctx()) {
+                Some(DeleteBranchAction::Confirm) => actions.push(Action::DeleteBranch),
+                Some(DeleteBranchAction::Cancel) => actions.push(Action::CloseDeleteBranch),
                 None => {}
             }
         }
@@ -962,7 +1030,12 @@ impl RepoTab {
                                 .color(theme::colors().text_muted),
                         );
                         for branch in list.iter() {
-                            let resp = branch_row(ui, branch);
+                            let (resp, delete) = branch_row(ui, branch);
+                            if delete {
+                                actions.push(Action::AskDeleteBranch(branch.name.clone()));
+                                ui.close();
+                                continue;
+                            }
                             let resp = match &branch.upstream {
                                 Some(up) => resp.on_hover_text(format!("Sigue a {up}")),
                                 None => resp,
@@ -1042,6 +1115,9 @@ impl RepoTab {
                         actions.push(Action::NewBranch(Some(i)))
                     }
                     Some(ContextAction::SwitchBranch(name)) => actions.push(Action::SwitchTo(name)),
+                    Some(ContextAction::DeleteBranch(name)) => {
+                        actions.push(Action::AskDeleteBranch(name))
+                    }
                     Some(ContextAction::Checkout(i)) => {
                         if let Some(commit) = self.commits.get(i) {
                             actions.push(Action::CheckoutCommit(commit.id.clone()));
@@ -1484,18 +1560,31 @@ fn search_controls(
     ui.add_space(6.0);
 }
 
-/// Fila del menú de ramas: icono, nombre y marca de la actual.
-fn branch_row(ui: &mut egui::Ui, branch: &git::Branch) -> egui::Response {
+/// Fila del menú de ramas: icono, nombre y marca de la actual. Las ramas
+/// locales que no son la actual muestran al pasar el ratón un botón para
+/// borrarlas; el `bool` indica si se pulsó. Las remotas nunca lo tienen.
+fn branch_row(ui: &mut egui::Ui, branch: &git::Branch) -> (egui::Response, bool) {
     let sense = if branch.current {
         egui::Sense::hover()
     } else {
         egui::Sense::click()
     };
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 30.0), sense);
+    let deletable = !branch.remote && !branch.current;
+    let trash_rect = egui::Rect::from_center_size(
+        egui::pos2(rect.right() - 16.0, rect.center().y),
+        egui::vec2(24.0, 24.0),
+    );
+    // Se registra después de la fila para quedar encima de ella.
+    let trash = deletable.then(|| {
+        ui.interact(trash_rect, resp.id.with("delete"), egui::Sense::click())
+            .on_hover_text("Borrar rama local")
+    });
+    let row_hovered = ui.rect_contains_pointer(rect);
     let painter = ui.painter();
     if branch.current {
         painter.rect_filled(rect, 6.0, theme::accent_soft());
-    } else if resp.hovered() {
+    } else if row_hovered {
         painter.rect_filled(rect, 6.0, theme::colors().bg_active);
     }
     let icon = if branch.remote {
@@ -1533,6 +1622,25 @@ fn branch_row(ui: &mut egui::Ui, branch: &git::Branch) -> egui::Response {
         font,
         text_color,
     );
+    let mut delete = false;
+    if let Some(trash) = &trash
+        && row_hovered
+    {
+        let color = if trash.hovered() {
+            painter.rect_filled(trash_rect, 6.0, theme::colors().bg_code);
+            theme::colors().red
+        } else {
+            theme::colors().text_muted
+        };
+        icons::paint(
+            painter,
+            egui::Rect::from_center_size(trash_rect.center(), egui::vec2(12.0, 12.0)),
+            Icon::Trash,
+            color,
+            2.0,
+        );
+        delete = trash.clicked();
+    }
     if branch.current {
         icons::paint(
             painter,
@@ -1544,9 +1652,9 @@ fn branch_row(ui: &mut egui::Ui, branch: &git::Branch) -> egui::Response {
             theme::colors().accent,
             2.2,
         );
-        resp.on_hover_text("Rama actual")
+        (resp.on_hover_text("Rama actual"), false)
     } else {
-        resp
+        (resp, delete)
     }
 }
 

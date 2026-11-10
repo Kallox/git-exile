@@ -41,6 +41,8 @@ pub struct CommitList {
 pub enum ContextAction {
     CreateBranch(usize),
     SwitchBranch(String),
+    /// Borrar una rama local (nunca remota) por nombre.
+    DeleteBranch(String),
     Checkout(usize),
 }
 
@@ -222,6 +224,22 @@ impl CommitList {
                         {
                             response.context = Some(ContextAction::Checkout(i));
                             ui.close();
+                        }
+                        // Solo ramas locales que no son la actual; las remotas no se borran.
+                        let deletable = commits[i]
+                            .refs
+                            .iter()
+                            .filter(|r| r.kind == RefKind::Branch { current: false });
+                        let mut first = true;
+                        for label in deletable {
+                            if std::mem::take(&mut first) {
+                                ui.separator();
+                            }
+                            if ui.button(format!("Borrar rama {}…", label.name)).clicked() {
+                                response.context =
+                                    Some(ContextAction::DeleteBranch(label.name.clone()));
+                                ui.close();
+                            }
                         }
                         ui.separator();
                         if ui.button("Copiar hash").clicked() {

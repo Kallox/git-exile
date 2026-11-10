@@ -20,7 +20,10 @@ mod worktree;
 #[cfg(test)]
 pub(crate) mod testutil;
 
-pub use branch::{Branch, checkout_commit, create_branch, list_branches, switch_branch};
+pub use branch::{
+    Branch, checkout_commit, create_branch, delete_branch, list_branches, switch_branch,
+    unmerged_commits,
+};
 pub use commit::{
     create_commit, discard, last_commit_message, stage, stage_all, unstage, unstage_all,
 };

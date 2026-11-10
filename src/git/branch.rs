@@ -1,4 +1,4 @@
-//! Ramas: listar, crear, cambiar y moverse a un commit.
+//! Ramas: listar, crear, cambiar, borrar (solo locales) y moverse a un commit.
 
 use super::repo::Repo;
 use super::runner::{GitError, Result};
@@ -100,6 +100,53 @@ pub fn switch_branch(repo: &Repo, branch: &Branch, branches: &[Branch]) -> Resul
     } else {
         repo.git(&["switch", "--track", &branch.name]).map(drop)
     }
+}
+
+/// Comprueba que `name` es una rama local (`refs/heads/<name>`).
+fn ensure_local_branch(repo: &Repo, name: &str) -> Result<()> {
+    let refname = format!("refs/heads/{name}");
+    match repo.git(&["show-ref", "--verify", "--quiet", &refname]) {
+        Ok(_) => Ok(()),
+        Err(GitError::Failed { .. }) => Err(GitError::Refused(format!(
+            "\"{name}\" no es una rama local: solo se pueden borrar ramas locales"
+        ))),
+        Err(e) => Err(e),
+    }
+}
+
+/// Número de commits de la rama local `name` que no están en ninguna otra
+/// rama (local o remota), tag ni en HEAD: los que se perderían al borrarla.
+pub fn unmerged_commits(repo: &Repo, name: &str) -> Result<usize> {
+    ensure_local_branch(repo, name)?;
+    let refname = format!("refs/heads/{name}");
+    let exclude = format!("--exclude={name}");
+    let out = repo.git(&[
+        "rev-list",
+        "--count",
+        &refname,
+        "--not",
+        &exclude,
+        "--branches",
+        "--remotes",
+        "--tags",
+        "HEAD",
+    ])?;
+    out.trim()
+        .parse()
+        .map_err(|_| GitError::Parse(format!("conteo de commits inválido: {out:?}")))
+}
+
+/// Borra la rama local `name`. Nunca toca ramas remotas ni el servidor:
+/// se niega si `name` no es una rama local o si es la rama actual.
+pub fn delete_branch(repo: &Repo, name: &str) -> Result<()> {
+    ensure_local_branch(repo, name)?;
+    if repo.current_branch()?.as_deref() == Some(name) {
+        return Err(GitError::Refused(format!(
+            "\"{name}\" es la rama actual: cambia a otra antes de borrarla"
+        )));
+    }
+    // `-D`: el usuario ya confirmó sabiendo si se pierden commits.
+    repo.git(&["branch", "-D", "--", name]).map(drop)
 }
 
 /// Mueve HEAD al commit `id` sin rama (HEAD separado).
@@ -220,5 +267,78 @@ mod tests {
         let now = list_branches(&repo).unwrap();
         let local = now.iter().find(|b| b.name == "remote-only").unwrap();
         assert_eq!(local.upstream.as_deref(), Some("origin/remote-only"));
+    }
+
+    #[test]
+    fn deletes_local_branch_and_counts_unmerged_commits() {
+        let t = TestRepo::new();
+        t.commit_file("a.txt", "1\n", "first");
+        t.git(&["branch", "merged"]);
+        t.git(&["switch", "-q", "-c", "work"]);
+        t.commit_file("a.txt", "2\n", "only in work");
+        t.git(&["switch", "-q", "main"]);
+        let repo = Repo::open(t.path()).unwrap();
+
+        assert_eq!(unmerged_commits(&repo, "merged").unwrap(), 0);
+        assert_eq!(unmerged_commits(&repo, "work").unwrap(), 1);
+
+        delete_branch(&repo, "merged").unwrap();
+        delete_branch(&repo, "work").unwrap();
+        let left: Vec<String> = list_branches(&repo)
+            .unwrap()
+            .into_iter()
+            .map(|b| b.name)
+            .collect();
+        assert_eq!(left, ["main"]);
+    }
+
+    #[test]
+    fn refuses_to_delete_current_or_missing_branch() {
+        let t = TestRepo::new();
+        t.commit_file("a.txt", "1\n", "first");
+        let repo = Repo::open(t.path()).unwrap();
+        assert!(matches!(
+            delete_branch(&repo, "main"),
+            Err(GitError::Refused(_))
+        ));
+        assert!(matches!(
+            delete_branch(&repo, "nope"),
+            Err(GitError::Refused(_))
+        ));
+        assert_eq!(repo.current_branch().unwrap().as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn never_deletes_remote_branches() {
+        let origin = TestRepo::new();
+        origin.commit_file("a.txt", "1\n", "first");
+        origin.git(&["branch", "remote-only"]);
+
+        let t = TestRepo::new();
+        let url = origin.path().display().to_string();
+        t.git(&["remote", "add", "origin", &url]);
+        t.git(&["fetch", "-q", "origin"]);
+        t.git(&["switch", "-q", "-c", "main", "--track", "origin/main"]);
+        let repo = Repo::open(t.path()).unwrap();
+
+        for name in [
+            "origin/remote-only",
+            "remotes/origin/remote-only",
+            "remote-only",
+        ] {
+            assert!(
+                matches!(delete_branch(&repo, name), Err(GitError::Refused(_))),
+                "{name:?}"
+            );
+            assert!(unmerged_commits(&repo, name).is_err(), "{name:?}");
+        }
+        // Siguen intactas en local y en el servidor.
+        let branches = list_branches(&repo).unwrap();
+        assert!(branches.iter().any(|b| b.name == "origin/remote-only"));
+        assert!(
+            origin
+                .git(&["branch", "--list", "remote-only"])
+                .contains("remote-only")
+        );
     }
 }
