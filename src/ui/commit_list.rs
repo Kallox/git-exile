@@ -35,6 +35,8 @@ pub struct CommitList {
     scroll_to: Option<ListRow>,
     last_offset: f32,
     last_height: f32,
+    /// Rama actual (`None` con HEAD separado): el menú ofrece resetearla.
+    pub current_branch: Option<String>,
 }
 
 /// Acciones del menú contextual de un commit.
@@ -43,6 +45,8 @@ pub enum ContextAction {
     SwitchBranch(String),
     /// Borrar una rama local (nunca remota) por nombre.
     DeleteBranch(String),
+    /// Resetear la rama actual a este commit (soft o hard, se elige después).
+    Reset(usize),
     Checkout(usize),
 }
 
@@ -223,6 +227,19 @@ impl CommitList {
                                 .clicked()
                         {
                             response.context = Some(ContextAction::Checkout(i));
+                            ui.close();
+                        }
+                        // Con HEAD separado no hay rama que mover.
+                        if let Some(branch) = &self.current_branch
+                            && ui
+                                .button(format!("Reset de {branch} aquí…"))
+                                .on_hover_text(
+                                    "Mueve la rama actual a este commit: soft mantiene los \
+                                     cambios, hard los descarta",
+                                )
+                                .clicked()
+                        {
+                            response.context = Some(ContextAction::Reset(i));
                             ui.close();
                         }
                         // Solo ramas locales que no son la actual; las remotas no se borran.

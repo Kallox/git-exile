@@ -13,6 +13,7 @@ use crate::ui::delete_branch_dialog::{DeleteBranchAction, DeleteBranchDialog};
 use crate::ui::diff_view;
 use crate::ui::discard_dialog::{DiscardAction, DiscardDialog};
 use crate::ui::icons::{self, ButtonStyle, Icon};
+use crate::ui::reset_dialog::{ResetAction, ResetDialog};
 use crate::ui::status_panel::{self, StatusAction, WtFile};
 use crate::ui::theme;
 use crate::worker::Worker;
@@ -49,6 +50,12 @@ pub enum RepoMessage {
         result: git::Result<usize>,
     },
     BranchDeleted(git::Result<()>),
+    /// Qué saldría de la rama actual al resetearla al commit `target`.
+    ResetPreview {
+        target: String,
+        result: git::Result<git::ResetPreview>,
+    },
+    ResetDone(git::Result<()>),
     Branches(git::Result<Vec<git::Branch>>),
     Remotes(git::Result<Vec<git::Remote>>),
     Synced(git::Result<()>),
@@ -117,6 +124,10 @@ enum Action {
     AskDeleteBranch(String),
     CloseDeleteBranch,
     DeleteBranch,
+    /// Abrir el diálogo de reset de la rama actual al commit con este índice.
+    AskReset(usize),
+    CloseReset,
+    Reset,
     /// Abrir la confirmación para descartar los cambios de un archivo.
     AskDiscard(DiscardDialog),
     CloseDiscard,
@@ -168,6 +179,7 @@ pub struct RepoTab {
     new_branch: Option<NewBranchDialog>,
     discard: Option<DiscardDialog>,
     delete_branch: Option<DeleteBranchDialog>,
+    reset: Option<ResetDialog>,
     branches: Vec<git::Branch>,
     branch_filter: String,
     /// `None` hasta la primera lectura; vacío si el repositorio está solo en local.
@@ -210,6 +222,7 @@ impl RepoTab {
             new_branch: None,
             discard: None,
             delete_branch: None,
+            reset: None,
             branches: Vec::new(),
             branch_filter: String::new(),
             remotes: None,
@@ -442,6 +455,43 @@ impl RepoTab {
                     });
                 }
             }
+            Action::AskReset(i) => {
+                let Some(commit) = self.commits.get(i) else {
+                    return;
+                };
+                // Los archivos nuevos sin seguimiento no los toca ningún reset.
+                let changes = self.status.as_ref().map_or(0, |s| {
+                    s.staged.len()
+                        + s.conflicted.len()
+                        + s.unstaged
+                            .iter()
+                            .filter(|e| e.kind != git::ChangeKind::Untracked)
+                            .count()
+                });
+                let target = commit.id.clone();
+                let label = format!("{} {}", commit.short_id, commit.summary);
+                self.reset = Some(ResetDialog::new(target.clone(), label, changes));
+                let repo = self.repo.clone();
+                jobs.spawn(move || RepoMessage::ResetPreview {
+                    result: git::reset_preview(&repo, &target),
+                    target,
+                });
+            }
+            Action::CloseReset => self.reset = None,
+            Action::Reset => {
+                if let Some(dialog) = &mut self.reset
+                    && let Some(preview) = &dialog.preview
+                {
+                    dialog.busy = true;
+                    let branch = preview.branch.clone();
+                    let target = dialog.target.clone();
+                    let mode = dialog.mode;
+                    let repo = self.repo.clone();
+                    jobs.spawn(move || {
+                        RepoMessage::ResetDone(git::reset_branch(&repo, &branch, &target, mode))
+                    });
+                }
+            }
             Action::AskDiscard(dialog) => self.discard = Some(dialog),
             Action::CloseDiscard => self.discard = None,
             Action::Discard => {
@@ -526,6 +576,7 @@ impl RepoTab {
             RepoMessage::Status(result) => match result {
                 Ok((status, refs)) => {
                     self.branch = status.branch.clone();
+                    self.list.current_branch = status.branch.clone();
                     self.status = Some(status);
                     // Cambios hechos fuera (terminal, otro programa...).
                     let refs_changed = self.refs.as_ref().is_some_and(|r| r != &refs);
@@ -590,6 +641,30 @@ impl RepoTab {
                     self.refresh_status(jobs);
                 }
                 Err(e) => match &mut self.delete_branch {
+                    Some(dialog) => {
+                        dialog.busy = false;
+                        dialog.error = Some(e.to_string());
+                    }
+                    None => self.error = Some(e.to_string()),
+                },
+            },
+            RepoMessage::ResetPreview { target, result } => {
+                if let Some(dialog) = &mut self.reset
+                    && dialog.target == target
+                {
+                    match result {
+                        Ok(preview) => dialog.preview = Some(preview),
+                        Err(e) => dialog.error = Some(e.to_string()),
+                    }
+                }
+            }
+            RepoMessage::ResetDone(result) => match result {
+                Ok(()) => {
+                    self.reset = None;
+                    // Cambian la rama y el working tree: se recarga todo.
+                    self.refresh_status(jobs);
+                }
+                Err(e) => match &mut self.reset {
                     Some(dialog) => {
                         dialog.busy = false;
                         dialog.error = Some(e.to_string());
@@ -782,6 +857,13 @@ impl RepoTab {
             match dialog.show(ui.ctx()) {
                 Some(DeleteBranchAction::Confirm) => actions.push(Action::DeleteBranch),
                 Some(DeleteBranchAction::Cancel) => actions.push(Action::CloseDeleteBranch),
+                None => {}
+            }
+        }
+        if let Some(dialog) = &mut self.reset {
+            match dialog.show(ui.ctx()) {
+                Some(ResetAction::Confirm) => actions.push(Action::Reset),
+                Some(ResetAction::Cancel) => actions.push(Action::CloseReset),
                 None => {}
             }
         }
@@ -1118,6 +1200,7 @@ impl RepoTab {
                     Some(ContextAction::DeleteBranch(name)) => {
                         actions.push(Action::AskDeleteBranch(name))
                     }
+                    Some(ContextAction::Reset(i)) => actions.push(Action::AskReset(i)),
                     Some(ContextAction::Checkout(i)) => {
                         if let Some(commit) = self.commits.get(i) {
                             actions.push(Action::CheckoutCommit(commit.id.clone()));

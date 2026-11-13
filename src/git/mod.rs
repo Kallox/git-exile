@@ -12,6 +12,7 @@ mod identity;
 mod log;
 mod remote;
 mod repo;
+mod reset;
 mod runner;
 mod status;
 mod sync;
@@ -40,6 +41,7 @@ pub use log::{Commit, RefKind, RefLabel, load_log};
 pub use remote::Hosting;
 pub use remote::{Protocol, Remote, connect_remote, list_remotes};
 pub use repo::Repo;
+pub use reset::{ResetMode, ResetPreview, reset_branch, reset_preview};
 #[cfg(test)]
 pub use runner::run;
 pub use runner::{Result, version};
