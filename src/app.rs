@@ -252,6 +252,19 @@ impl GitExileApp {
         self.refresh_active();
     }
 
+    /// Mueve una pestaña a otra posición conservando cuál está activa.
+    fn move_tab(&mut self, from: usize, to: usize) {
+        if from == to || from >= self.tabs.len() || to >= self.tabs.len() {
+            return;
+        }
+        let active = self.tabs.get(self.active).map(|t| t.id);
+        let tab = self.tabs.remove(from);
+        self.tabs.insert(to, tab);
+        if let Some(i) = active.and_then(|id| self.tabs.iter().position(|t| t.id == id)) {
+            self.active = i;
+        }
+    }
+
     fn close(&mut self, index: usize) {
         if index >= self.tabs.len() {
             return;
@@ -377,6 +390,9 @@ impl GitExileApp {
         let mut close = None;
         let mut open = None;
         let mut new_tab = false;
+        // Pestaña arrastrada y posición del puntero, con el centro de cada pestaña.
+        let mut drag = None;
+        let mut centers = Vec::with_capacity(self.tabs.len());
 
         ui.horizontal_centered(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
@@ -385,7 +401,13 @@ impl GitExileApp {
                 .show(ui, |ui| {
                     ui.horizontal_centered(|ui| {
                         for (i, tab) in self.tabs.iter().enumerate() {
-                            let action = tab_widget(ui, tab, i == self.active);
+                            let (resp, action) = tab_widget(ui, tab, i == self.active);
+                            centers.push(resp.rect.center().x);
+                            if resp.dragged()
+                                && let Some(pos) = resp.interact_pointer_pos()
+                            {
+                                drag = Some((i, pos.x));
+                            }
                             match action {
                                 Some(TabWidgetAction::Activate) => activate = Some(i),
                                 Some(TabWidgetAction::Close) => close = Some(i),
@@ -435,6 +457,11 @@ impl GitExileApp {
             self.close(i);
         } else if let Some(i) = activate {
             self.activate(i);
+        }
+        if close.is_none()
+            && let Some((from, x)) = drag
+        {
+            self.move_tab(from, drop_index(&centers, from, x));
         }
         if let Some(path) = open {
             self.open(path);
@@ -588,8 +615,25 @@ enum TabWidgetAction {
     Close,
 }
 
+/// Posición a la que se mueve la pestaña `from` al arrastrarla hasta `x`: pasa por
+/// encima de cada vecina cuyo centro haya cruzado el puntero.
+fn drop_index(centers: &[f32], from: usize, x: f32) -> usize {
+    let mut to = from;
+    while to + 1 < centers.len() && x > centers[to + 1] {
+        to += 1;
+    }
+    while to > 0 && x < centers[to - 1] {
+        to -= 1;
+    }
+    to
+}
+
 /// Una pestaña: icono, título y botón de cerrar.
-fn tab_widget(ui: &mut egui::Ui, tab: &Tab, active: bool) -> Option<TabWidgetAction> {
+fn tab_widget(
+    ui: &mut egui::Ui,
+    tab: &Tab,
+    active: bool,
+) -> (egui::Response, Option<TabWidgetAction>) {
     let title = tab.title();
     let font = theme::font(13.0);
     let galley = ui.painter().layout_no_wrap(
@@ -602,7 +646,17 @@ fn tab_widget(ui: &mut egui::Ui, tab: &Tab, active: bool) -> Option<TabWidgetAct
         },
     );
     let width = 12.0 + 14.0 + 8.0 + galley.size().x + 8.0 + 24.0 + 6.0;
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 32.0), egui::Sense::click());
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 32.0), egui::Sense::hover());
+    // Id fijo por pestaña: al reordenar durante el arrastre, el widget arrastrado sigue
+    // siendo el mismo aunque cambie de posición.
+    let resp = ui.interact(
+        rect,
+        egui::Id::new(("tab", tab.id)),
+        egui::Sense::click_and_drag(),
+    );
+    if resp.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    }
     let resp = resp.on_hover_text(tab.path().display().to_string());
     let painter = ui.painter();
     if active {
@@ -675,13 +729,14 @@ fn tab_widget(ui: &mut egui::Ui, tab: &Tab, active: bool) -> Option<TabWidgetAct
         2.2,
     );
 
-    if close.clicked() || resp.middle_clicked() {
+    let action = if close.clicked() || resp.middle_clicked() {
         Some(TabWidgetAction::Close)
-    } else if resp.clicked() {
+    } else if resp.clicked() || resp.drag_started() {
         Some(TabWidgetAction::Activate)
     } else {
         None
-    }
+    };
+    (resp, action)
 }
 
 /// Compara rutas resolviendo enlaces simbólicos cuando es posible.
@@ -804,5 +859,25 @@ impl eframe::App for GitExileApp {
         eframe::set_value(storage, ACTIVE_TAB_KEY, &active);
         eframe::set_value(storage, THEME_KEY, &theme::current().id());
         eframe::set_value(storage, PROFILES_KEY, &self.profiles);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::drop_index;
+
+    #[test]
+    fn drop_index_stays_until_crossing_a_neighbour_centre() {
+        let centers = [50.0, 150.0, 250.0];
+        assert_eq!(drop_index(&centers, 1, 140.0), 1);
+        assert_eq!(drop_index(&centers, 1, 260.0), 2);
+        assert_eq!(drop_index(&centers, 1, 40.0), 0);
+    }
+
+    #[test]
+    fn drop_index_can_skip_several_tabs() {
+        let centers = [50.0, 150.0, 250.0, 350.0];
+        assert_eq!(drop_index(&centers, 0, 400.0), 3);
+        assert_eq!(drop_index(&centers, 3, 0.0), 0);
     }
 }
