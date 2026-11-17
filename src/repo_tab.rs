@@ -26,6 +26,7 @@ const LIST_MIN_HEIGHT: f32 = commit_list::HEADER_HEIGHT + 4.0 * commit_list::ROW
 const DETAILS_MIN_HEIGHT: f32 = 120.0;
 /// Separación entre la lista de archivos y el editor de commits.
 const EDITOR_TOP_MARGIN: f32 = 12.0;
+const EDITOR_DEFAULT_HEIGHT: f32 = 260.0;
 
 /// Resultado de un trabajo en segundo plano de una pestaña.
 pub enum RepoMessage {
@@ -170,6 +171,8 @@ pub struct RepoTab {
     wt_file: Option<WtFile>,
     wt_diff: Option<FileDiff>,
     editor: CommitEditor,
+    /// Alto del contenido del editor de commits en el último frame.
+    editor_height: f32,
     /// Identidad con la que se harán los commits y de dónde sale.
     identity: Option<git::Identity>,
     /// Ya se revisó si había que aplicar un perfil al abrir el repositorio.
@@ -219,6 +222,8 @@ impl RepoTab {
             wt_file: None,
             wt_diff: None,
             editor: CommitEditor::default(),
+            // Hasta medirlo, un alto que suele bastar para que no salte.
+            editor_height: EDITOR_DEFAULT_HEIGHT,
             identity: None,
             auto_profile_checked: false,
             auto_profile_notice: None,
@@ -1274,9 +1279,13 @@ impl RepoTab {
             .min_width(280.0)
             .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(24, 20)))
             .show_inside(ui, |ui| {
-                // Con poco alto el editor se desplaza en vez de agrandar el panel.
-                let editor_max = (ui.available_height() - EDITOR_TOP_MARGIN).max(0.0);
+                // El editor ocupa el alto de su contenido (medido en el frame anterior), con
+                // el alto del panel como tope: si no cabe se desplaza en vez de agrandarlo.
+                let editor_height = (self.editor_height + EDITOR_TOP_MARGIN)
+                    .min(ui.available_height())
+                    .max(EDITOR_TOP_MARGIN);
                 egui::TopBottomPanel::bottom("commit_editor")
+                    .exact_height(editor_height)
                     .frame(egui::Frame::new().inner_margin(egui::Margin {
                         top: EDITOR_TOP_MARGIN as i8,
                         ..Default::default()
@@ -1284,10 +1293,9 @@ impl RepoTab {
                     .show_separator_line(false)
                     .resizable(false)
                     .show_inside(ui, |ui| {
-                        egui::ScrollArea::vertical()
+                        let content = egui::ScrollArea::vertical()
                             .id_salt("commit_editor_scroll")
-                            .max_height(editor_max)
-                            .auto_shrink([false, true])
+                            .auto_shrink(false)
                             .show(ui, |ui| {
                                 ui.add_space(4.0);
                                 let remotes = self.remotes.as_deref().unwrap_or_default();
@@ -1332,6 +1340,11 @@ impl RepoTab {
                                     None => {}
                                 }
                             });
+                        let height = content.content_size.y;
+                        if (height - self.editor_height).abs() > 0.5 {
+                            self.editor_height = height;
+                            ui.ctx().request_repaint();
+                        }
                     });
                 if let Some(action) = status_panel::show(ui, status, self.wt_file.as_ref()) {
                     actions.push(match action {
