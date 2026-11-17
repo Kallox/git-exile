@@ -4,7 +4,7 @@ use eframe::egui::{self, Key, Modifiers, RichText, TextEdit, Ui};
 
 use super::icons::{self, ButtonStyle, Icon};
 use super::theme;
-use crate::git::{Identity, Profile};
+use crate::git::{Identity, Profile, Service};
 
 const SUMMARY_SOFT_LIMIT: usize = 50;
 const SUMMARY_HARD_LIMIT: usize = 72;
@@ -33,6 +33,8 @@ pub enum EditorAction {
     /// Quitar la identidad del repositorio para usar la global.
     UseGlobalIdentity,
     ManageProfiles,
+    /// No volver a avisar en este repositorio de que el correo es público.
+    SilenceEmailWarning,
 }
 
 /// Lo que el editor necesita saber del repositorio para dibujarse.
@@ -46,6 +48,8 @@ pub struct EditorContext<'a> {
     pub suggested: Option<(usize, &'a Profile)>,
     /// Aviso de que se aplicó un perfil al abrir el repositorio.
     pub notice: Option<&'a str>,
+    /// Correo que quedará público al subir los commits a GitHub o GitLab.
+    pub public_email: Option<&'a str>,
 }
 
 impl CommitEditor {
@@ -101,6 +105,9 @@ impl CommitEditor {
         });
         if let Some(warning) = identity_warning(ui, cx) {
             action = Some(warning);
+        }
+        if let Some(silence) = public_email_warning(ui, cx) {
+            action = Some(silence);
         }
         if let Some(notice) = cx.notice {
             ui.label(
@@ -306,6 +313,38 @@ fn identity_warning(ui: &mut Ui, cx: &EditorContext) -> Option<EditorAction> {
         );
         if ui.small_button("Usar este perfil").clicked() {
             action = Some(EditorAction::UseProfile(index));
+        }
+    });
+    action
+}
+
+/// Aviso de que el correo de los commits quedará a la vista de cualquiera.
+fn public_email_warning(ui: &mut Ui, cx: &EditorContext) -> Option<EditorAction> {
+    let email = cx.public_email?;
+    let mut action = None;
+    ui.horizontal_wrapped(|ui| {
+        ui.label(
+            RichText::new(format!(
+                "Tu correo {email} quedará público en los commits que subas"
+            ))
+            .size(12.0)
+            .color(ui.visuals().warn_fg_color),
+        )
+        .on_hover_text(format!(
+            "Cualquiera puede verlo con git log o añadiendo .patch a la URL de un commit, y \
+             no se puede borrar después sin reescribir el historial.\n\n\
+             Para ocultarlo usa la dirección privada de tu cuenta en user.email (o en un \
+             perfil):\n• {}\n• {}\n\n\
+             Sigue asociando los commits a tu cuenta.",
+            Service::GitHub.private_email_hint(),
+            Service::GitLab.private_email_hint(),
+        ));
+        if ui
+            .small_button("No avisar en este repo")
+            .on_hover_text("Se guarda en .git/config de este repositorio")
+            .clicked()
+        {
+            action = Some(EditorAction::SilenceEmailWarning);
         }
     });
     action

@@ -161,6 +161,18 @@ impl ProfilesDialog {
         if changed {
             self.error = None;
         }
+        if let Some(service) = d.service.filter(|_| d.exposes_email()) {
+            ui.label(
+                RichText::new(format!(
+                    "Este correo quedará público en cada commit que subas a {}. Para \
+                     ocultarlo usa tu dirección privada: {}.",
+                    service.label(),
+                    service.private_email_hint(),
+                ))
+                .size(12.0)
+                .color(ui.visuals().warn_fg_color),
+            );
+        }
         muted(
             ui,
             "Para que GitHub o GitLab muestren los commits firmados como verificados, el \

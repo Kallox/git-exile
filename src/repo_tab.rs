@@ -107,6 +107,8 @@ enum Action {
     /// Escribir el perfil en la configuración local del repositorio.
     ApplyProfile(git::Profile),
     UseGlobalIdentity,
+    /// Dejar de avisar en el repositorio de que el correo es público.
+    SilenceEmailWarning,
     /// Abrir el diálogo de perfiles (lo gestiona la aplicación).
     ManageProfiles,
     Refresh,
@@ -395,6 +397,9 @@ impl RepoTab {
             }
             Action::ApplyProfile(profile) => {
                 self.run_op(jobs, move |repo| git::apply_profile(repo, &profile));
+            }
+            Action::SilenceEmailWarning => {
+                self.run_op(jobs, git::silence_email_warning);
             }
             Action::UseGlobalIdentity => {
                 self.auto_profile_notice = None;
@@ -1276,6 +1281,10 @@ impl RepoTab {
                             profiles,
                             suggested: git::suggested_profile(profiles, remotes),
                             notice: self.auto_profile_notice.as_deref(),
+                            public_email: self
+                                .identity
+                                .as_ref()
+                                .and_then(|id| git::public_email(id, remotes)),
                         };
                         match self.editor.show(ui, cx) {
                             Some(EditorAction::Commit {
@@ -1300,6 +1309,9 @@ impl RepoTab {
                             }
                             Some(EditorAction::ManageProfiles) => {
                                 actions.push(Action::ManageProfiles)
+                            }
+                            Some(EditorAction::SilenceEmailWarning) => {
+                                actions.push(Action::SilenceEmailWarning)
                             }
                             None => {}
                         }

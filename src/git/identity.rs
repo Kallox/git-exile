@@ -16,6 +16,9 @@ use super::runner::{GitError, Result};
 /// entonces no se le aplica ningún perfil de forma automática.
 const AUTO_PROFILE_KEY: &str = "gitexile.autoprofile";
 
+/// Clave local que vale `false` cuando se pidió no avisar de que el correo es público.
+const EMAIL_WARNING_KEY: &str = "gitexile.publicemailwarning";
+
 /// Claves que escribe un perfil y que se borran al volver a la identidad global.
 const PROFILE_KEYS: [&str; 5] = [
     "user.name",
@@ -72,6 +75,20 @@ impl Service {
         }
     }
 
+    /// Dónde encuentra cada servicio la dirección que oculta el correo.
+    pub fn private_email_hint(self) -> &'static str {
+        match self {
+            Self::GitHub => {
+                "GitHub → Settings → Emails, activa \"Keep my email addresses private\" y \
+                 copia la dirección ID+usuario@users.noreply.github.com"
+            }
+            Self::GitLab => {
+                "GitLab → Preferences → Profile, elige \"Use a private email\" en el correo \
+                 de commits; la dirección es ID-usuario@users.noreply.<servidor>"
+            }
+        }
+    }
+
     fn hosts(self, hosting: &Hosting) -> bool {
         matches!(
             (self, hosting),
@@ -121,6 +138,12 @@ impl Profile {
         }
     }
 
+    /// El perfil es para un servicio público y su correo quedará visible en cada commit.
+    pub fn exposes_email(&self) -> bool {
+        let email = self.email.trim();
+        self.service.is_some() && email.contains('@') && !is_private_email(email)
+    }
+
     /// `true` si git creará los commits tal como los crearía este perfil: mismo nombre,
     /// mismo correo (sin distinguir mayúsculas) y firmados o no según el perfil.
     pub fn is_active(&self, identity: &Identity) -> bool {
@@ -131,6 +154,28 @@ impl Profile {
                 .is_some_and(|e| self.email.trim().eq_ignore_ascii_case(e.trim()))
             && self.sign == identity.signing.is_some()
     }
+}
+
+/// Dirección que GitHub o GitLab dan para no publicar el correo real
+/// (`…@users.noreply.github.com`, `…@users.noreply.gitlab.com` o la de un GitLab propio).
+fn is_private_email(email: &str) -> bool {
+    email.rsplit_once('@').is_some_and(|(_, domain)| {
+        domain
+            .trim()
+            .to_ascii_lowercase()
+            .starts_with("users.noreply.")
+    })
+}
+
+/// Correo que quedará público al subir commits a GitHub o GitLab, si hay que avisarlo:
+/// no es una dirección privada y no se pidió dejar de avisar en el repositorio.
+pub fn public_email<'a>(identity: &'a Identity, remotes: &[Remote]) -> Option<&'a str> {
+    let email = identity.email.as_deref()?.trim();
+    let public_host = remotes
+        .iter()
+        .any(|r| matches!(r.hosting, Hosting::GitHub | Hosting::GitLab));
+    (identity.email_warning && public_host && !email.is_empty() && !is_private_email(email))
+        .then_some(email)
 }
 
 /// Primer perfil del servicio de alguno de los remotos, con su posición en `profiles`.
@@ -160,6 +205,8 @@ pub struct Identity {
     pub signing: Option<String>,
     /// Se le puede aplicar un perfil automáticamente (no se eligió la identidad global).
     pub auto_profile: bool,
+    /// Avisar si el correo quedará público (no se pidió dejar de hacerlo en el repositorio).
+    pub email_warning: bool,
 }
 
 impl Identity {
@@ -226,6 +273,12 @@ pub fn identity(repo: &Repo) -> Result<Identity> {
     identity.auto_profile =
         config_get(repo, &["--local", "--type=bool", "--get", AUTO_PROFILE_KEY])?.as_deref()
             != Some("false");
+    identity.email_warning = config_get(
+        repo,
+        &["--local", "--type=bool", "--get", EMAIL_WARNING_KEY],
+    )?
+    .as_deref()
+        != Some("false");
 
     let sign = config_get(repo, &["--type=bool", "--get", "commit.gpgsign"])?;
     if sign.as_deref() == Some("true") {
@@ -278,6 +331,11 @@ pub fn clear_local_identity(repo: &Repo) -> Result<()> {
         unset_local(repo, key)?;
     }
     set_local(repo, AUTO_PROFILE_KEY, "false")
+}
+
+/// Deja de avisar en el repositorio de que el correo de los commits es público.
+pub fn silence_email_warning(repo: &Repo) -> Result<()> {
+    set_local(repo, EMAIL_WARNING_KEY, "false")
 }
 
 /// Perfil que hay que aplicar al abrir el repositorio: el de su servicio (GitHub o GitLab),
@@ -520,6 +578,69 @@ mod tests {
         apply_profile(&repo, &work()).unwrap();
         assert!(identity(&repo).unwrap().auto_profile);
         assert_eq!(local(&t, AUTO_PROFILE_KEY), None);
+    }
+
+    #[test]
+    fn recognizes_private_emails() {
+        assert!(is_private_email("123+luis@users.noreply.github.com"));
+        assert!(is_private_email("luis@users.noreply.github.com"));
+        assert!(is_private_email("123-luis@users.noreply.gitlab.com"));
+        assert!(is_private_email("9-ana@Users.NoReply.gitlab.uni.example.edu"));
+        assert!(!is_private_email("luis@gmail.com"));
+        assert!(!is_private_email("noreply@github.com"));
+        assert!(!is_private_email("users.noreply.github.com"));
+    }
+
+    #[test]
+    fn profiles_for_a_service_warn_about_public_emails() {
+        let mut p = work();
+        assert!(p.exposes_email());
+        p.email = "9-ana@users.noreply.gitlab.uni.example.edu".into();
+        assert!(!p.exposes_email());
+        // Sin servicio no se sabe dónde se publicará.
+        let local = Profile {
+            service: None,
+            ..work()
+        };
+        assert!(!local.exposes_email());
+    }
+
+    #[test]
+    fn warns_about_public_email_only_on_github_or_gitlab() {
+        let t = TestRepo::new();
+        let repo = Repo::open(t.path()).unwrap();
+        let remote = |hosting| Remote {
+            name: "origin".into(),
+            url: String::new(),
+            hosting,
+            protocol: Protocol::Ssh,
+        };
+        let github = [remote(Hosting::GitHub)];
+        let id = identity(&repo).unwrap();
+        assert!(id.email_warning);
+        assert_eq!(public_email(&id, &github), Some("test@example.com"));
+        assert_eq!(
+            public_email(&id, &[remote(Hosting::GitLab)]),
+            Some("test@example.com")
+        );
+        assert_eq!(
+            public_email(&id, &[remote(Hosting::Other("git.x".into()))]),
+            None
+        );
+        assert_eq!(public_email(&id, &[remote(Hosting::Disk)]), None);
+        assert_eq!(public_email(&id, &[]), None);
+
+        t.git(&["config", "user.email", "1+test@users.noreply.github.com"]);
+        assert_eq!(public_email(&identity(&repo).unwrap(), &github), None);
+
+        t.git(&["config", "user.email", "test@example.com"]);
+        silence_email_warning(&repo).unwrap();
+        let id = identity(&repo).unwrap();
+        assert!(!id.email_warning);
+        assert_eq!(public_email(&id, &github), None);
+        // Cambiar de identidad no reactiva el aviso: es una decisión sobre el repositorio.
+        clear_local_identity(&repo).unwrap();
+        assert!(!identity(&repo).unwrap().email_warning);
     }
 
     #[test]
