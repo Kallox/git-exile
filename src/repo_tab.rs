@@ -7,7 +7,7 @@ use crate::git::{self, Commit, CommitDetails, FileDiff, Graph, Repo, WorkingTree
 use crate::ui::branch_dialog::{DialogAction, NewBranchDialog};
 use crate::ui::commit_details::{self, DetailsAction};
 use crate::ui::commit_editor::{CommitEditor, EditorAction, EditorContext};
-use crate::ui::commit_list::{CommitList, ContextAction, ListRow};
+use crate::ui::commit_list::{self, CommitList, ContextAction, ListRow};
 use crate::ui::connect_remote_dialog::{ConnectAction, ConnectRemoteDialog};
 use crate::ui::delete_branch_dialog::{DeleteBranchAction, DeleteBranchDialog};
 use crate::ui::diff_view;
@@ -21,6 +21,11 @@ use crate::worker::Worker;
 const LOG_PAGE: usize = 500;
 /// Ancho fijo del buscador: el contador y las flechas van dentro y no mueven nada.
 const SEARCH_WIDTH: f32 = 340.0;
+/// Alto mínimo que el panel de detalles deja a la gráfica: la cabecera y cuatro filas.
+const LIST_MIN_HEIGHT: f32 = commit_list::HEADER_HEIGHT + 4.0 * commit_list::ROW_HEIGHT;
+const DETAILS_MIN_HEIGHT: f32 = 120.0;
+/// Separación entre la lista de archivos y el editor de commits.
+const EDITOR_TOP_MARGIN: f32 = 12.0;
 
 /// Resultado de un trabajo en segundo plano de una pestaña.
 pub enum RepoMessage {
@@ -1155,11 +1160,15 @@ impl RepoTab {
             self.selected = None;
         }
         if self.selected.is_some() {
+            // La gráfica conserva siempre la cabecera y unas filas: sin este tope el panel
+            // crece con su contenido (p. ej. el editor de commits) y la tapa entera.
+            let available = ui.available_height();
             egui::TopBottomPanel::bottom("details_panel")
                 .frame(egui::Frame::new())
                 .resizable(true)
-                .default_height(ui.available_height() * 0.55)
-                .min_height(120.0)
+                .default_height(available * 0.55)
+                .min_height(DETAILS_MIN_HEIGHT)
+                .max_height((available - LIST_MIN_HEIGHT).max(DETAILS_MIN_HEIGHT))
                 .show_inside(ui, |ui| match self.selected {
                     Some(ListRow::WorkingTree) => self.worktree_panel(ui, actions, profiles),
                     _ => self.details_panel(ui, actions),
@@ -1265,56 +1274,64 @@ impl RepoTab {
             .min_width(280.0)
             .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(24, 20)))
             .show_inside(ui, |ui| {
+                // Con poco alto el editor se desplaza en vez de agrandar el panel.
+                let editor_max = (ui.available_height() - EDITOR_TOP_MARGIN).max(0.0);
                 egui::TopBottomPanel::bottom("commit_editor")
                     .frame(egui::Frame::new().inner_margin(egui::Margin {
-                        top: 12,
+                        top: EDITOR_TOP_MARGIN as i8,
                         ..Default::default()
                     }))
                     .show_separator_line(false)
                     .resizable(false)
                     .show_inside(ui, |ui| {
-                        ui.add_space(4.0);
-                        let remotes = self.remotes.as_deref().unwrap_or_default();
-                        let cx = EditorContext {
-                            staged: status.staged.len(),
-                            identity: self.identity.as_ref(),
-                            profiles,
-                            suggested: git::suggested_profile(profiles, remotes),
-                            notice: self.auto_profile_notice.as_deref(),
-                            public_email: self
-                                .identity
-                                .as_ref()
-                                .and_then(|id| git::public_email(id, remotes)),
-                        };
-                        match self.editor.show(ui, cx) {
-                            Some(EditorAction::Commit {
-                                message,
-                                amend,
-                                reset_author,
-                            }) => actions.push(Action::Commit {
-                                message,
-                                amend,
-                                reset_author,
-                            }),
-                            Some(EditorAction::LoadLastMessage) => {
-                                actions.push(Action::LoadLastMessage)
-                            }
-                            Some(EditorAction::UseProfile(i)) => {
-                                if let Some(profile) = profiles.get(i) {
-                                    actions.push(Action::ApplyProfile(profile.clone()));
+                        egui::ScrollArea::vertical()
+                            .id_salt("commit_editor_scroll")
+                            .max_height(editor_max)
+                            .auto_shrink([false, true])
+                            .show(ui, |ui| {
+                                ui.add_space(4.0);
+                                let remotes = self.remotes.as_deref().unwrap_or_default();
+                                let cx = EditorContext {
+                                    staged: status.staged.len(),
+                                    identity: self.identity.as_ref(),
+                                    profiles,
+                                    suggested: git::suggested_profile(profiles, remotes),
+                                    notice: self.auto_profile_notice.as_deref(),
+                                    public_email: self
+                                        .identity
+                                        .as_ref()
+                                        .and_then(|id| git::public_email(id, remotes)),
+                                };
+                                match self.editor.show(ui, cx) {
+                                    Some(EditorAction::Commit {
+                                        message,
+                                        amend,
+                                        reset_author,
+                                    }) => actions.push(Action::Commit {
+                                        message,
+                                        amend,
+                                        reset_author,
+                                    }),
+                                    Some(EditorAction::LoadLastMessage) => {
+                                        actions.push(Action::LoadLastMessage)
+                                    }
+                                    Some(EditorAction::UseProfile(i)) => {
+                                        if let Some(profile) = profiles.get(i) {
+                                            actions.push(Action::ApplyProfile(profile.clone()));
+                                        }
+                                    }
+                                    Some(EditorAction::UseGlobalIdentity) => {
+                                        actions.push(Action::UseGlobalIdentity)
+                                    }
+                                    Some(EditorAction::ManageProfiles) => {
+                                        actions.push(Action::ManageProfiles)
+                                    }
+                                    Some(EditorAction::SilenceEmailWarning) => {
+                                        actions.push(Action::SilenceEmailWarning)
+                                    }
+                                    None => {}
                                 }
-                            }
-                            Some(EditorAction::UseGlobalIdentity) => {
-                                actions.push(Action::UseGlobalIdentity)
-                            }
-                            Some(EditorAction::ManageProfiles) => {
-                                actions.push(Action::ManageProfiles)
-                            }
-                            Some(EditorAction::SilenceEmailWarning) => {
-                                actions.push(Action::SilenceEmailWarning)
-                            }
-                            None => {}
-                        }
+                            });
                     });
                 if let Some(action) = status_panel::show(ui, status, self.wt_file.as_ref()) {
                     actions.push(match action {

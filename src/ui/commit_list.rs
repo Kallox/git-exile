@@ -6,7 +6,7 @@ use super::theme;
 use crate::git::{Commit, Graph, GraphRow, RefKind, RefLabel};
 
 pub const ROW_HEIGHT: f32 = 34.0;
-const HEADER_HEIGHT: f32 = 32.0;
+pub const HEADER_HEIGHT: f32 = 32.0;
 const HASH_WIDTH: f32 = 96.0;
 const DATE_WIDTH: f32 = 150.0;
 const AUTHOR_WIDTH: f32 = 190.0;
