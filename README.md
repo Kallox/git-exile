@@ -7,6 +7,8 @@ No usa la API de GitHub, GitLab ni de ningún otro servicio: ejecuta el binario 
 por lo que usa tu configuración de git tal cual (`user.name`, `user.email`, hooks, firma GPG/SSH,
 credential helpers, etc.).
 
+![Historial con el grafo de ramas y los detalles de un commit](assets/screenshots/history.png)
+
 ## Funcionalidades
 
 - Historial de todas las ramas, remotos y tags con grafo de ramas y merges.
@@ -42,6 +44,8 @@ credential helpers, etc.).
   recursiva y abrirlos con "Abrir repositorio".
 - Clonar repositorios remotos e inicializar repositorios nuevos desde el buscador.
 - Lista de repositorios recientes.
+
+![Cambios sin commitear, diff del archivo y editor de commits](assets/screenshots/changes.png)
 
 ## Instalación
 
